@@ -471,15 +471,16 @@ function viewDividends() {
   </div>
   <div class="card"><div class="table-wrap">${rows.length ? `<table>
     <thead><tr><th class="sortable" data-sort="date">Date${arrow("date")}</th><th class="sortable" data-sort="ticker">Ticker${arrow("ticker")}</th>
-      <th class="sortable hide-sm" data-sort="account">Account${arrow("account")}</th><th class="hide-sm">Notes</th><th class="sortable r" data-sort="amount">Amount${arrow("amount")}</th><th></th></tr></thead>
+      <th class="sortable hide-sm" data-sort="account">Account${arrow("account")}</th><th class="hide-sm">Notes</th><th class="r hide-sm">Shares</th><th class="sortable r" data-sort="amount">Amount${arrow("amount")}</th><th></th></tr></thead>
     <tbody>${rows.map(p => `<tr>
       <td class="num muted" style="white-space:nowrap">${fmtDate(p.date)}</td>
       <td><div class="cell-tk">${badge(p.ticker)}<span class="tk-name">${esc(p.ticker)}</span></div></td>
       <td class="hide-sm">${p.account ? `<span class="tag">${esc(p.account)}</span>` : ""}</td>
       <td class="muted hide-sm">${esc(p.notes || "")}</td>
+      <td class="r hide-sm">${p.shares > 0 ? `<div class="num">${(+p.shares).toLocaleString("en-US", { maximumFractionDigits: 4 })}</div><div class="tk-sub num">${usd(p.amount / p.shares, 4)} / share</div>` : '<span class="muted">—</span>'}</td>
       <td class="r num amt">+${usd(p.amount)}</td>
       <td class="r"><span class="row-actions"><button data-act="edit-pay" data-id="${esc(p.id)}" aria-label="Edit ${esc(p.ticker)} payment">${ICON.edit}</button></span></td></tr>`).join("")}</tbody>
-    <tfoot><tr><td colspan="2">${rows.length} payment${rows.length > 1 ? "s" : ""}</td><td class="hide-sm"></td><td class="hide-sm"></td><td class="r num">${usd(sum(rows, p => p.amount))}</td><td></td></tr></tfoot>
+    <tfoot><tr><td colspan="2">${rows.length} payment${rows.length > 1 ? "s" : ""}</td><td class="hide-sm"></td><td class="hide-sm"></td><td class="hide-sm"></td><td class="r num">${usd(sum(rows, p => p.amount))}</td><td></td></tr></tfoot>
   </table>` : `<div class="empty"><div class="big">${P.length ? "No matches" : "No payments yet"}</div>
       <div>${P.length ? "Try a different search or year." : "Log your first dividend, or import a CSV."}</div>
       ${P.length ? "" : `<div class="actions"><button class="btn primary" data-act="add-pay">Add dividend</button></div>`}</div>`}</div></div>`;
@@ -611,12 +612,19 @@ function openPay(id) {
   openForm({ title: p ? "Edit dividend" : "Add dividend", fields: [
     { id: "ticker", label: "Ticker", value: p?.ticker, ph: "SCHD", list: "tickers", max: 12 },
     { id: "amount", label: "Amount received ($)", type: "number", value: p?.amount, ph: "0.00" },
+    { id: "shares", label: "Number of shares", opt: 1, type: "number", value: p?.shares || "", ph: "0", hint: "Shares that earned this payment" },
     { id: "date", label: "Pay date", type: "date", value: p?.date || today() },
-    { id: "account", label: "Portfolio", opt: 1, value: p?.account ?? acctDefault(), ph: "Brokerage, Roth IRA…", list: "accounts", max: 40 },
+    { id: "account", label: "Portfolio", opt: 1, full: 1, value: p?.account ?? acctDefault(), ph: "Brokerage, Roth IRA…", list: "accounts", max: 40 },
     { id: "notes", label: "Notes", opt: 1, full: 1, value: p?.notes, ph: "Special dividend, reinvested…", max: 120 } ],
+    onOpen: () => { if (p) return; const fill = () => {   // suggest the shares currently held
+        const t = up($("#f_ticker").value), a = $("#f_account").value.trim(), el = $("#f_shares"); if (!t || (el.value && !el.dataset.auto)) return;
+        const hs = positions(true).filter(h => h.ticker === t && h.shares > 0), h = hs.find(x => (x.account || "") === a) || (hs.length === 1 ? hs[0] : null);
+        el.value = h ? +h.shares.toFixed(6) : ""; el.dataset.auto = "1"; };
+      $("#f_ticker").addEventListener("change", fill); $("#f_account").addEventListener("change", fill);
+      $("#f_shares").addEventListener("input", e => (e.target.dataset.auto = "")); },
     onSave: async v => {
       v.ticker = up(v.ticker); if (!v.ticker) bad("Enter a ticker."); if (!(v.amount > 0)) bad("Enter an amount greater than zero."); if (!isDate(v.date)) bad("Pick a pay date.");
-      v.amount = Math.round(v.amount * 100) / 100;
+      v.amount = Math.round(v.amount * 100) / 100; v.shares = v.shares > 0 ? v.shares : 0;
       await (p ? store.update("dividends", id, v) : store.add("dividends", v)); return p ? "Dividend updated" : `Added ${usd(v.amount)} from ${v.ticker}`;
     },
     onDelete: p && (() => store.remove("dividends", id)) });
@@ -728,7 +736,7 @@ function download(name, text, type) {
 }
 function exportCsv() {
   const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const rows = [["Date","Ticker","Amount","Account","Notes"], ...state.payments.filter(inAcct).sort((a, b) => a.date.localeCompare(b.date)).map(p => [p.date, p.ticker, p.amount, p.account, p.notes])];
+  const rows = [["Date","Ticker","Amount","Shares","Account","Notes"], ...state.payments.filter(inAcct).sort((a, b) => a.date.localeCompare(b.date)).map(p => [p.date, p.ticker, p.amount, p.shares || "", p.account, p.notes])];
   download(`dividends-${today()}.csv`, rows.map(r => r.map(q).join(",")).join("\n"), "text/csv");
 }
 function parseCsv(text) {
@@ -744,12 +752,12 @@ async function importCsv(file) {
   try {
     const rows = parseCsv(await file.text()); if (rows.length < 2) return toast("That file has no rows to import");
     const head = rows[0].map(h => h.trim().toLowerCase()), ix = n => head.findIndex(h => n.some(x => h === x || h.includes(x)));
-    const cD = ix(["date"]), cT = ix(["ticker", "symbol"]), cA = ix(["amount", "total", "value"]), cAc = ix(["account", "portfolio"]), cN = ix(["note", "description"]);
+    const cD = ix(["date"]), cT = ix(["ticker", "symbol"]), cA = ix(["amount", "total", "value"]), cAc = ix(["account", "portfolio"]), cN = ix(["note", "description"]), cS = ix(["shares", "quantity"]);
     if (cD < 0 || cT < 0 || cA < 0) return toast("CSV needs Date, Ticker and Amount columns");
     const toIso = s => { s = s.trim(); if (isDate(s.slice(0, 10))) return s.slice(0, 10); const m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/); return m ? `${m[3].length === 2 ? "20" + m[3] : m[3]}-${pad(m[1])}-${pad(m[2])}` : ""; };
     const have = new Set(state.payments.map(p => [p.date, p.ticker, p.amount, p.account || ""].join("|"))), jobs = []; let skip = 0;
     for (const r of rows.slice(1)) {
-      const d = { date: toIso(r[cD] || ""), ticker: up(r[cT] || ""), amount: Math.round(parseFloat(String(r[cA] || "").replace(/[$,\s]/g, "")) * 100) / 100, account: cAc > -1 ? (r[cAc] || "").trim() : "", notes: cN > -1 ? (r[cN] || "").trim().slice(0, 120) : "" };
+      const d = { date: toIso(r[cD] || ""), ticker: up(r[cT] || ""), amount: Math.round(parseFloat(String(r[cA] || "").replace(/[$,\s]/g, "")) * 100) / 100, account: cAc > -1 ? (r[cAc] || "").trim() : "", notes: cN > -1 ? (r[cN] || "").trim().slice(0, 120) : "", shares: cS > -1 ? parseFloat(String(r[cS] || "").replace(/,/g, "")) || 0 : 0 };
       if (!d.date || !d.ticker || !(d.amount > 0) || have.has([d.date, d.ticker, d.amount, d.account].join("|"))) { skip++; continue; }
       jobs.push(store.add("dividends", d));
     }
