@@ -37,4 +37,4 @@ service cloud.firestore {
 }
 ```
 
-Everything lives in `index.html`; there is no build step.
+The app is plain HTML, CSS and JavaScript (`index.html`, `styles.css`, `app.js`); there is no build step.
