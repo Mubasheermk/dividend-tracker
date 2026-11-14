@@ -15,7 +15,7 @@ const COLS = { dividends: "payments", holdings: "holdings", transactions: "txns"
 /* ───────── State & helpers ───────── */
 const state = { payments: [], holdings: [], txns: [], watch: [], settingsDocs: [], snapshots: [],
   mode: "connecting", tab: "dashboard", acct: "all", range: "12m", alloc: "holding", q: "", year: "all", sortK: "date", sortD: -1,
-  banner: "", calMonth: "", calDay: "", quotes: {}, earnings: [], market: { tab: "news", news: null, ipos: null, busy: false }, apiErr: "", busy: false };
+  banner: "", divMsg: "", calMonth: "", calDay: "", quotes: {}, earnings: [], market: { tab: "news", news: null, ipos: null, busy: false }, apiErr: "", busy: false };
 let store = null;
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -184,8 +184,60 @@ async function loadMarketTab() {
   } catch (e) { console.warn(e); state.apiErr = e.message; }
   m.busy = false; render();
 }
+/* ───────── Dividend data (Massive, optional): fills dividend per share, frequency, next pay and ex-dividend dates ───────── */
+const MV = "https://api.massive.com", MV_GAP = window.__mvGap ?? 13000;   // free plan allows 5 calls a minute
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let mvOld = false, divRun = false;
+async function mvDividends(t) {
+  const k = "&apiKey=" + encodeURIComponent(settings().massiveKey), q = "ticker=" + encodeURIComponent(t);
+  const get = async u => {
+    const r = await fetch(u);
+    if (r.status === 429) { const e = new Error("Massive rate limit reached. Dividend data will finish updating next time."); e.rate = true; throw e; }
+    if (r.status === 401 || r.status === 403) throw new Error("Massive rejected the API key, or dividend data isn't on your plan.");
+    if (!r.ok) throw new Error("Massive request failed (" + r.status + ").");
+    return (await r.json()).results || [];
+  };
+  if (!mvOld) try { return await get(`${MV}/stocks/v1/dividends?${q}&limit=12&sort=ex_dividend_date.desc${k}`); } catch (e) { if (e.rate) throw e; console.warn("New Massive endpoint failed, trying the older one:", e.message); mvOld = true; }
+  return get(`${MV}/v3/reference/dividends?${q}&limit=12&order=desc&sort=ex_dividend_date${k}`);
+}
+async function applyDividends(t, recs) {
+  const R = recs.filter(r => r.cash_amount > 0 && r.ex_dividend_date && (!r.distribution_type || r.distribution_type === "recurring") && (!r.dividend_type || r.dividend_type === "CD"))
+    .sort((a, b) => b.ex_dividend_date.localeCompare(a.ex_dividend_date));
+  if (!R.length) return 0;
+  const L = R[0]; let f = [1, 2, 4, 12].includes(+L.frequency) ? +L.frequency : 0;
+  if (!f && R.length > 1) { const gap = (parse(R[0].ex_dividend_date) - parse(R[1].ex_dividend_date)) / 864e5; f = gap < 45 ? 12 : gap < 135 ? 4 : gap < 270 ? 2 : 1; }
+  f = f || 4; const t0 = today(), step = 12 / f;
+  const next = d => { if (!d || !isDate(d.slice(0, 10))) return ""; const a = parse(d.slice(0, 10)); for (let k = 0; k < 60; k++) { const x = iso(addMonths(a, k * step, a.getDate())); if (x >= t0) return x; } return ""; };
+  const data = { dps: +(L.cash_amount * f).toFixed(4), freq: f, nextPay: next(L.pay_date), exDate: next(L.ex_dividend_date) };
+  let n = 0;
+  for (const h of state.holdings.filter(h => h.ticker === t)) {
+    if (Object.keys(data).every(k => String(h[k] ?? "") === String(data[k]))) continue;
+    await store.update("holdings", h.id, data); n++;
+  }
+  return n;
+}
+async function syncDividends(force) {
+  if (!settings().massiveKey || divRun || !store) return;
+  divRun = true; let n = 0, calls = 0;
+  try {
+    const T = uniq(state.holdings.map(h => h.ticker));
+    for (let i = 0; i < T.length; i++) {
+      const t = T[i], ck = "dt_mv:" + t; let recs = null;
+      try { const c = JSON.parse(localStorage.getItem(ck)); if (c && Date.now() - c.t < (force ? 36e5 : 6048e5)) recs = c.d; } catch {}
+      if (!recs) {
+        state.divMsg = `Updating dividend data (${i + 1} of ${T.length})…`; render();
+        if (calls++) await sleep(MV_GAP);
+        recs = await mvDividends(t); try { localStorage.setItem(ck, JSON.stringify({ t: Date.now(), d: recs })); } catch {}
+      }
+      n += await applyDividends(t, recs);
+    }
+    if (n) toast(`Dividend data updated for ${n} holding${n === 1 ? "" : "s"}`);
+  } catch (e) { console.warn(e); state.apiErr = e.message; }
+  divRun = false; state.divMsg = ""; render();
+}
+
 let readyDone = false;
-function onReady() { if (readyDone) return; readyDone = true; refreshMarket(); }
+function onReady() { if (readyDone) return; readyDone = true; refreshMarket(); syncDividends(); }
 
 /* ───────── Calculations ───────── */
 function positions(all) {
@@ -371,7 +423,7 @@ function viewPortfolio() {
   const T = state.txns.filter(inAcct).sort((a, b) => b.date.localeCompare(a.date));
   const num = (n, d = 4) => (+n).toLocaleString("en-US", { maximumFractionDigits: d });
   return `
-  <div class="toolbar"><div class="muted">${settings().finnhubKey ? (state.busy ? "Refreshing prices…" : "Live prices from Finnhub.") : "Prices are the ones you enter on each holding. Add a market-data key in Settings for live quotes."}</div><span class="spacer"></span>
+  <div class="toolbar"><div class="muted">${settings().finnhubKey ? (state.busy ? "Refreshing prices…" : "Live prices from Finnhub.") : "Prices are the ones you enter on each holding. Add a market-data key in Settings for live quotes."}${state.divMsg ? " " + esc(state.divMsg) : ""}</div><span class="spacer"></span>
     <button class="btn" data-act="add-txn">Add transaction</button><button class="btn primary" data-act="add-hold">Add holding</button></div>
   <div class="card"><div class="table-wrap">${H.length ? `<table>
     <thead><tr><th>Holding</th><th class="r">Shares</th><th class="r hide-sm">Avg cost</th><th class="r">Price</th><th class="r">Value</th><th class="r hide-sm">Total gain</th><th class="r hide-sm">Yield / on cost</th><th class="r">Annual income</th><th></th></tr></thead>
@@ -501,7 +553,7 @@ function render() {
   $("#statusText").textContent = { connecting: "Connecting…", cloud: "Synced to Firebase", local: "Saved on this device", signedout: "Not signed in" }[state.mode];
   const app = state.mode === "cloud" || state.mode === "local";
   document.querySelectorAll(".app-only").forEach(e => (e.hidden = !app));
-  $("#refreshBtn").hidden = !app || !settings().finnhubKey;
+  $("#refreshBtn").hidden = !app || !(settings().finnhubKey || settings().massiveKey);
   $("#logoutBtn").hidden = !(fb && fb.user);
   $("#cPay").textContent = state.payments.filter(inAcct).length; $("#cHold").textContent = state.holdings.filter(inAcct).length; $("#cWatch").textContent = state.watch.length;
   const msgs = [state.banner, state.apiErr && `<b>Market data:</b> ${esc(state.apiErr)}`].filter(Boolean);
@@ -576,7 +628,7 @@ function openHold(id) {
     { id: "name", label: "Name", opt: 1, value: h?.name, ph: "Schwab US Dividend Equity", max: 60 },
     { id: "shares", label: "Shares", type: "number", value: d ? +d.shares.toFixed(6) : "", disabled: d?.hasTx, hint: d?.hasTx ? "Calculated from transactions" : "" },
     { id: "cost", label: "Avg cost / share ($)", type: "number", value: d?.cost ? +d.cost.toFixed(4) : "", disabled: d?.hasTx, hint: d?.hasTx ? "Calculated from transactions" : "" },
-    { id: "dps", label: "Annual dividend / share ($)", type: "number", value: h?.dps || "", ph: "0.00" },
+    { id: "dps", label: "Annual dividend / share ($)", type: "number", value: h?.dps || "", ph: "0.00", hint: settings().massiveKey ? "Kept up to date from Massive, with the dates below" : "" },
     { id: "freq", label: "Pays", type: "select", value: h?.freq || 4, opts: [[12, "Monthly"], [4, "Quarterly"], [2, "Semi-annually"], [1, "Annually"]] },
     { id: "nextPay", label: "Next pay date", opt: 1, type: "date", value: h?.nextPay, hint: "Repeats on the calendar" },
     { id: "exDate", label: "Next ex-dividend date", opt: 1, type: "date", value: h?.exDate },
@@ -643,12 +695,15 @@ function openSettings() {
   const s = settings(), who = fb?.user ? esc(fb.user.email || fb.user.displayName || "") : "";
   openForm({ title: "Settings", fields: [
     { id: "finnhubKey", label: "Finnhub API key", opt: 1, full: 1, type: "password", value: s.finnhubKey, max: 80, hint: "Free key from finnhub.io. Turns on live prices, earnings dates, news and IPOs. Stored in your private settings, not in the site's code." },
+    { id: "massiveKey", label: "Massive API key", opt: 1, full: 1, type: "password", value: s.massiveKey, max: 80, hint: "Free key from massive.com. Fills in each holding's dividend per share, frequency, next pay date and ex-dividend date." },
     { id: "goal", label: "Annual dividend income goal ($)", opt: 1, full: 1, type: "number", value: s.goal || "" } ],
     extra: who ? `<p class="muted" style="margin:18px 0 0;font-size:13px">Signed in as <b>${who}</b> · <button type="button" class="btn sm ghost" data-act="signout">Sign out</button></p>` : "",
-    onSave: async v => { const changed = v.finnhubKey !== (s.finnhubKey || ""); await store.set("settings", "main", { finnhubKey: v.finnhubKey, goal: v.goal || 0 });
+    onSave: async v => { const changed = v.finnhubKey !== (s.finnhubKey || ""); const mvChanged = v.massiveKey !== (s.massiveKey || "");
+      await store.set("settings", "main", { finnhubKey: v.finnhubKey, massiveKey: v.massiveKey, goal: v.goal || 0 });
+      if (mvChanged && v.massiveKey) { mvOld = false; setTimeout(() => syncDividends(true), 400); }
       if (changed) { state.quotes = {}; state.earnings = []; state.market.news = state.market.ipos = null; state.apiErr = ""; setTimeout(() => refreshMarket(true), 300); } return "Settings saved"; } });
 }
-let rs; const refreshSoon = () => { clearTimeout(rs); rs = setTimeout(() => refreshMarket(), 800); };
+let rs; const refreshSoon = () => { clearTimeout(rs); rs = setTimeout(() => { refreshMarket(); syncDividends(); }, 800); };
 
 /* ───────── Sample data, CSV, ICS ───────── */
 async function loadSample() {
@@ -729,7 +784,7 @@ document.addEventListener("click", e => {
   else if (d.cal) { const n = +d.cal; if (!n) { state.calMonth = today().slice(0, 7); state.calDay = ""; } else { const [y, m] = state.calMonth.split("-").map(Number); state.calMonth = iso(new Date(y, m - 1 + n, 1)).slice(0, 7); } render(); }
   else if (t.id === "addBtn") { if (store) openPay(); }
   else if (t.id === "settingsBtn") { if (store) openSettings(); }
-  else if (t.id === "refreshBtn") refreshMarket(true);
+  else if (t.id === "refreshBtn") { refreshMarket(true); syncDividends(true); }
   else if (t.id === "themeBtn") { const n = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = n; try { localStorage.setItem("dt_theme", n); } catch {} }
 });
 document.addEventListener("input", e => { if (e.target.id === "q") { state.q = e.target.value; render(); } });

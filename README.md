@@ -18,6 +18,8 @@ A single-page web app for tracking dividend income, synced with Firebase Firesto
 Live prices, earnings, news and IPOs need a free [Finnhub](https://finnhub.io) API key, entered in Settings.
 It is stored in the signed-in user's Firestore settings, not in this repo. Without a key the app uses prices you enter.
 
+Dividend amounts and dates can be filled in automatically with a free [Massive](https://massive.com) API key, also entered in Settings.
+
 ## Setup
 
 Sign-in is with Google. Each user's data lives under `users/{uid}/` (dividends, holdings, transactions, watchlist, settings, snapshots).
