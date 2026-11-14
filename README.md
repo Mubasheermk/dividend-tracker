@@ -6,16 +6,21 @@ A single-page web app for tracking dividend income, synced with Firebase Firesto
 
 ## Features
 
-- Dashboard: income this year, last 12 months, projected annual income, top payers
-- Payments log with search, sort, year filter and CSV export
-- Holdings with yield on cost and projected income
-- Dark and light themes, responsive layout
+- **Dashboard:** portfolio value and gains, income this year, projected annual income with a goal, next payout, income and forecast charts, allocation by holding or sector
+- **Portfolio:** holdings with buy/sell transactions, average cost, gains, yield and yield on cost; multiple portfolios with a filter
+- **Dividends:** payment log, income-by-month table with yearly growth, CSV import and export
+- **Calendar:** paid and expected dividends, ex-dividend dates and earnings, with `.ics` export
+- **Watchlist:** live prices and target-price alerts shown in the app
+- **Market:** news for your holdings, earnings dates and upcoming IPOs
 - Google sign-in; data is private per account
-- Falls back to browser storage if Firestore is unreachable
+- Dark and light themes, responsive layout
+
+Live prices, earnings, news and IPOs need a free [Finnhub](https://finnhub.io) API key, entered in Settings.
+It is stored in the signed-in user's Firestore settings, not in this repo. Without a key the app uses prices you enter.
 
 ## Setup
 
-Sign-in is with Google. Each user's data lives under `users/{uid}/dividends` and `users/{uid}/holdings`.
+Sign-in is with Google. Each user's data lives under `users/{uid}/` (dividends, holdings, transactions, watchlist, settings, snapshots).
 
 1. Firebase console → Authentication → Sign-in method: enable Google.
 2. Authentication → Settings → Authorized domains: add `mubasheermk.github.io`.
