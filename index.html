@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dividend Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0e0d; --bg2:#0e1412; --surface:#121916; --surface2:#172019; --border:#222e29;
+  --text:#e9f0eb; --muted:#8b9b93; --faint:#5d6c65;
+  --accent:#3ddc97; --accent-ink:#04130c; --accent-soft:rgba(61,220,151,.12);
+  --gold:#f2c14e; --danger:#ff6b6b; --danger-soft:rgba(255,107,107,.12);
+  --shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 12px 32px -16px rgba(0,0,0,.6);
+  --radius:16px;
+}
+[data-theme="light"]{
+  --bg:#f4f2ec; --bg2:#efece4; --surface:#ffffff; --surface2:#f8f6f1; --border:#e3dfd4;
+  --text:#14201b; --muted:#66756d; --faint:#9aa59f;
+  --accent:#0d8a5c; --accent-ink:#ffffff; --accent-soft:rgba(13,138,92,.10);
+  --gold:#b8860b; --danger:#d43f3f; --danger-soft:rgba(212,63,63,.10);
+  --shadow:0 1px 2px rgba(20,32,27,.04), 0 12px 28px -18px rgba(20,32,27,.25);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  font-family:Manrope,system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--text);
+  background:
+    radial-gradient(900px 500px at 85% -10%, var(--accent-soft), transparent 60%),
+    linear-gradient(var(--bg), var(--bg2));
+  background-attachment:fixed; min-height:100vh; font-size:15px; line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+.num{font-family:"JetBrains Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums; letter-spacing:-.02em}
+.wrap{max-width:1180px; margin:0 auto; padding:0 24px 80px}
+button,input,select,textarea{font:inherit; color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+/* header */
+header{display:flex; align-items:center; gap:16px; padding:22px 0 18px; flex-wrap:wrap}
+.brand{display:flex; align-items:center; gap:12px; margin-right:auto}
+.logo{width:38px; height:38px; border-radius:11px; background:var(--accent); color:var(--accent-ink); display:grid; place-items:center}
+.brand h1{font-family:Fraunces,Georgia,serif; font-weight:600; font-size:22px; margin:0; letter-spacing:-.01em}
+.brand small{display:block; color:var(--muted); font-size:12px; margin-top:-2px}
+.pill{display:inline-flex; align-items:center; gap:7px; padding:6px 11px; border-radius:999px; border:1px solid var(--border); background:var(--surface); font-size:12px; color:var(--muted); font-weight:600}
+.dot{width:7px; height:7px; border-radius:50%; background:var(--faint)}
+.pill.cloud .dot{background:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
+.pill.local .dot{background:var(--gold)}
+.pill.connecting .dot{animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.25}}
+.btn{border:1px solid var(--border); background:var(--surface); padding:9px 14px; border-radius:11px; font-weight:600; font-size:14px; display:inline-flex; align-items:center; gap:7px; transition:.15s}
+.btn:hover{border-color:var(--faint)}
+.btn.primary{background:var(--accent); color:var(--accent-ink); border-color:transparent}
+.btn.primary:hover{filter:brightness(1.07)}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--danger); border-color:transparent; background:var(--danger-soft)}
+.btn.icon{padding:9px; width:38px; height:38px; justify-content:center}
+.btn.sm{padding:6px 10px; font-size:13px; border-radius:9px}
+
+/* tabs */
+nav.tabs{display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:24px}
+nav.tabs button{background:none; border:0; padding:11px 14px; color:var(--muted); font-weight:600; border-bottom:2px solid transparent; margin-bottom:-1px}
+nav.tabs button:hover{color:var(--text)}
+nav.tabs button[aria-selected="true"]{color:var(--text); border-bottom-color:var(--accent)}
+nav.tabs .count{font-size:11px; background:var(--surface2); border:1px solid var(--border); padding:1px 7px; border-radius:999px; margin-left:6px; color:var(--muted)}
+
+.banner{border:1px solid var(--border); border-left:3px solid var(--gold); background:var(--surface); border-radius:12px; padding:12px 16px; margin-bottom:20px; font-size:13.5px; color:var(--muted); display:flex; gap:12px; align-items:flex-start}
+.banner b{color:var(--text)}
+.banner button{margin-left:auto; background:none; border:0; color:var(--faint); font-size:18px; line-height:1}
+
+/* cards */
+.card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow)}
+.kpis{display:grid; grid-template-columns:1.5fr 1fr 1fr 1fr; gap:16px; margin-bottom:16px}
+.kpi{padding:20px 22px}
+.kpi .label{color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.08em}
+.kpi .value{font-family:Fraunces,Georgia,serif; font-weight:500; font-size:30px; letter-spacing:-.02em; margin-top:8px; line-height:1.1}
+.kpi .sub{color:var(--muted); font-size:13px; margin-top:8px}
+.kpi.hero{background:linear-gradient(135deg, var(--accent-soft), transparent 70%), var(--surface)}
+.kpi.hero .value{font-size:44px}
+.delta{font-weight:700; padding:2px 7px; border-radius:6px; font-size:12px}
+.delta.up{color:var(--accent); background:var(--accent-soft)}
+.delta.down{color:var(--danger); background:var(--danger-soft)}
+
+.grid2{display:grid; grid-template-columns:1.7fr 1fr; gap:16px; margin-bottom:16px}
+.panel{padding:22px}
+.panel-head{display:flex; align-items:center; gap:12px; margin-bottom:18px}
+.panel-head h2{font-size:15px; margin:0; font-weight:700; margin-right:auto}
+.panel-head .hint{color:var(--muted); font-size:13px}
+.seg{display:inline-flex; background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:3px}
+.seg button{border:0; background:none; padding:5px 11px; border-radius:7px; font-size:12.5px; font-weight:700; color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--surface); color:var(--text); box-shadow:0 1px 2px rgba(0,0,0,.2)}
+
+/* bar chart */
+.chart{display:flex; align-items:flex-end; gap:8px; height:230px; padding-top:26px; position:relative}
+.chart .col{flex:1; height:100%; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; gap:8px; min-width:0; position:relative}
+.chart .bar{width:100%; max-width:46px; border-radius:7px 7px 3px 3px; background:linear-gradient(var(--accent), color-mix(in srgb, var(--accent) 55%, transparent)); min-height:3px; transition:height .5s cubic-bezier(.2,.8,.2,1), filter .15s}
+.chart .bar.zero{background:var(--border)}
+.chart .col:hover .bar{filter:brightness(1.2)}
+.chart .tip{position:absolute; bottom:calc(var(--h) + 30px); background:var(--text); color:var(--bg); padding:3px 8px; border-radius:6px; font-size:11.5px; white-space:nowrap; opacity:0; pointer-events:none; transition:.12s; z-index:2}
+.chart .col:hover .tip{opacity:1}
+.chart .lbl{font-size:11px; color:var(--muted); font-weight:600; white-space:nowrap}
+.chart .col.now .lbl{color:var(--accent)}
+
+/* top payers */
+.rank{display:flex; flex-direction:column; gap:14px}
+.rank-row{display:grid; grid-template-columns:34px 1fr auto; gap:10px 12px; align-items:center}
+.rank-row .track{grid-column:2 / 4; height:5px; background:var(--surface2); border-radius:9px; overflow:hidden; margin-top:-4px}
+.rank-row .fill{height:100%; border-radius:9px; background:var(--accent)}
+.tk{width:34px; height:34px; border-radius:10px; display:grid; place-items:center; font-size:10.5px; font-weight:700; letter-spacing:.02em; color:#fff; flex:none}
+.tk-name{font-weight:700}
+.tk-sub{color:var(--muted); font-size:12px}
+
+/* tables */
+.toolbar{display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center}
+.toolbar .spacer{margin-left:auto}
+.input, select.input{background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:9px 12px; min-width:0}
+.input::placeholder{color:var(--faint)}
+.search{flex:1; max-width:320px}
+.table-wrap{overflow-x:auto; border-radius:var(--radius)}
+table{width:100%; border-collapse:collapse}
+th{font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); text-align:left; padding:13px 18px; border-bottom:1px solid var(--border); white-space:nowrap; font-weight:700}
+th.sortable{cursor:pointer; user-select:none}
+th.sortable:hover{color:var(--text)}
+td{padding:13px 18px; border-bottom:1px solid var(--border); vertical-align:middle}
+tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--surface2)}
+.r{text-align:right}
+.cell-tk{display:flex; align-items:center; gap:11px}
+.amt{color:var(--accent); font-weight:500}
+.muted{color:var(--muted)}
+.tag{font-size:11.5px; padding:2px 8px; border-radius:6px; background:var(--surface2); border:1px solid var(--border); color:var(--muted); font-weight:600}
+.row-actions{opacity:0; transition:.12s; white-space:nowrap}
+tr:hover .row-actions, .row-actions:focus-within{opacity:1}
+.row-actions button{background:none; border:0; color:var(--muted); padding:5px; border-radius:6px}
+.row-actions button:hover{color:var(--text); background:var(--border)}
+tfoot td{font-weight:700; background:var(--surface2); border-top:1px solid var(--border)}
+
+.empty{text-align:center; padding:56px 24px; color:var(--muted)}
+.empty .big{font-family:Fraunces,Georgia,serif; font-size:22px; color:var(--text); margin:14px 0 6px}
+.empty .actions{display:flex; gap:10px; justify-content:center; margin-top:18px; flex-wrap:wrap}
+.empty svg{color:var(--accent)}
+.skeleton{height:120px; border-radius:var(--radius); background:linear-gradient(90deg,var(--surface),var(--surface2),var(--surface)); background-size:200% 100%; animation:sh 1.2s infinite}
+@keyframes sh{to{background-position:-200% 0}}
+
+/* dialog */
+dialog{border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:20px; padding:0; width:min(480px, calc(100vw - 32px)); box-shadow:0 30px 80px -20px rgba(0,0,0,.6)}
+dialog::backdrop{background:rgba(4,8,6,.6); backdrop-filter:blur(4px)}
+dialog form{padding:24px}
+dialog h3{font-family:Fraunces,Georgia,serif; font-weight:600; font-size:22px; margin:0 0 18px}
+.fields{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+.field{display:flex; flex-direction:column; gap:6px}
+.field.full{grid-column:1/-1}
+.field label{font-size:12px; font-weight:700; color:var(--muted)}
+.field .input{width:100%; background:var(--surface2)}
+.dialog-actions{display:flex; gap:10px; margin-top:22px}
+.dialog-actions .spacer{margin-left:auto}
+.err{color:var(--danger); font-size:13px; margin-top:12px; min-height:18px}
+
+.toast{position:fixed; left:50%; bottom:28px; transform:translate(-50%,20px); background:var(--text); color:var(--bg); padding:10px 16px; border-radius:11px; font-weight:600; font-size:13.5px; opacity:0; transition:.2s; pointer-events:none; z-index:50}
+.toast.show{opacity:1; transform:translate(-50%,0)}
+
+@media (max-width:900px){
+  .kpis{grid-template-columns:1fr 1fr}
+  .kpi.hero, .kpi:last-child{grid-column:1/-1}
+  .grid2{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+  .wrap{padding:0 14px 70px}
+  .kpi .value{font-size:24px} .kpi.hero .value{font-size:36px}
+  .chart{gap:4px} .chart .lbl{font-size:9.5px}
+  .fields{grid-template-columns:1fr}
+  .hide-sm{display:none}
+  .row-actions{opacity:1}
+  th,td{padding:11px 12px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V11M10 19V5M16 19v-6M22 19H2"/></svg>
+      </div>
+      <div><h1>Dividend Tracker</h1><small id="today"></small></div>
+    </div>
+    <span class="pill connecting" id="status"><span class="dot"></span><span id="statusText">Connecting…</span></span>
+    <button class="btn icon" id="themeBtn" title="Toggle light / dark" aria-label="Toggle theme">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+    <button class="btn primary" id="addBtn">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      Add dividend
+    </button>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="dashboard" aria-selected="true">Dashboard</button>
+    <button role="tab" data-tab="payments" aria-selected="false">Payments<span class="count" id="cPay">0</span></button>
+    <button role="tab" data-tab="holdings" aria-selected="false">Holdings<span class="count" id="cHold">0</span></button>
+  </nav>
+
+  <div id="banner"></div>
+  <main id="view"><div class="skeleton"></div></main>
+</div>
+
+<!-- Payment dialog -->
+<dialog id="payDlg">
+  <form id="payForm" novalidate>
+    <h3 id="payTitle">Add dividend</h3>
+    <div class="fields">
+      <div class="field"><label for="pTicker">Ticker</label><input class="input" id="pTicker" list="tickers" placeholder="SCHD" autocomplete="off" maxlength="10" required></div>
+      <div class="field"><label for="pAmount">Amount received ($)</label><input class="input num" id="pAmount" type="number" step="0.01" min="0" placeholder="0.00" inputmode="decimal" required></div>
+      <div class="field"><label for="pDate">Pay date</label><input class="input" id="pDate" type="date" required></div>
+      <div class="field"><label for="pAccount">Account <span class="muted">(optional)</span></label><input class="input" id="pAccount" list="accounts" placeholder="Brokerage, Roth IRA…" maxlength="40"></div>
+      <div class="field full"><label for="pNotes">Notes <span class="muted">(optional)</span></label><input class="input" id="pNotes" placeholder="Special dividend, reinvested…" maxlength="120"></div>
+    </div>
+    <div class="err" id="payErr" role="alert"></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn danger" id="payDel" hidden>Delete</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Holding dialog -->
+<dialog id="holdDlg">
+  <form id="holdForm" novalidate>
+    <h3 id="holdTitle">Add holding</h3>
+    <div class="fields">
+      <div class="field"><label for="hTicker">Ticker</label><input class="input" id="hTicker" placeholder="SCHD" autocomplete="off" maxlength="10" required></div>
+      <div class="field"><label for="hName">Name <span class="muted">(optional)</span></label><input class="input" id="hName" placeholder="Schwab US Dividend Equity" maxlength="60"></div>
+      <div class="field"><label for="hShares">Shares</label><input class="input num" id="hShares" type="number" step="any" min="0" placeholder="0" inputmode="decimal" required></div>
+      <div class="field"><label for="hCost">Avg cost / share ($)</label><input class="input num" id="hCost" type="number" step="any" min="0" placeholder="0.00" inputmode="decimal"></div>
+      <div class="field"><label for="hDps">Annual dividend / share ($)</label><input class="input num" id="hDps" type="number" step="any" min="0" placeholder="0.00" inputmode="decimal"></div>
+      <div class="field"><label for="hFreq">Pays</label>
+        <select class="input" id="hFreq"><option value="12">Monthly</option><option value="4" selected>Quarterly</option><option value="2">Semi-annually</option><option value="1">Annually</option></select>
+      </div>
+    </div>
+    <div class="err" id="holdErr" role="alert"></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn danger" id="holdDel" hidden>Delete</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<datalist id="tickers"></datalist>
+<datalist id="accounts"></datalist>
+<div class="toast" id="toast" role="status"></div>
+
+<script type="module">
+/* ───────── Firebase configuration ───────── */
+const FB_VER = "13.3.0";
+const firebaseConfig = {
+  apiKey: "AIzaSyANiKAJGWSVSSiAm3v3vuUCGSg0wMXInmk",
+  authDomain: "dividend-tracker-86b12.firebaseapp.com",
+  projectId: "dividend-tracker-86b12",
+  storageBucket: "dividend-tracker-86b12.firebasestorage.app",
+  messagingSenderId: "304071822724",
+  appId: "1:304071822724:web:ec028fd2fe018367a721d1",
+  measurementId: "G-CWWFDWDE22"
+};
+const COL = { payments: "dividends", holdings: "holdings" };
+
+/* ───────── State & helpers ───────── */
+const state = { payments: [], holdings: [], mode: "connecting", tab: "dashboard", range: "12m",
+  q: "", year: "all", sortK: "date", sortD: -1, banner: "" };
+let store = null;
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const usd = (n, d = 2) => (n || 0).toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: d, maximumFractionDigits: d });
+const pct = n => (isFinite(n) ? (n * 100).toFixed(2) + "%" : "—");
+const pad = n => String(n).padStart(2, "0");
+const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmtDate = s => { const [y, m, d] = s.split("-").map(Number); return `${MONTHS[m - 1]} ${d}, ${y}`; };
+const sum = (a, f = x => x) => a.reduce((t, x) => t + (f(x) || 0), 0);
+const hue = t => { let h = 0; for (const c of t) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const badge = t => `<span class="tk" style="background:hsl(${hue(t)} 45% 38%)">${esc(t.slice(0, 4))}</span>`;
+const toast = msg => { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2200); };
+const ICON = {
+  edit: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  coin: '<svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .8-3 2s1 1.7 3 2 3 .8 3 2-1.3 2-3 2c-1.400 0-2.500-.5-3-1.500M12 6v2M12 16v2"/></svg>'
+};
+
+/* ───────── Storage: Firestore with a local fallback ───────── */
+const LS = { get: k => { try { return JSON.parse(localStorage.getItem("dt_" + k)) || []; } catch { return []; } },
+             set: (k, v) => { try { localStorage.setItem("dt_" + k, JSON.stringify(v)); } catch {} } };
+const stateKey = c => (c === COL.payments ? "payments" : "holdings");
+
+function useLocal(reason) {
+  state.mode = "local"; state.banner = reason || "";
+  state.payments = LS.get(COL.payments); state.holdings = LS.get(COL.holdings);
+  const save = c => LS.set(c, state[stateKey(c)]);
+  store = {
+    add: async (c, d) => { state[stateKey(c)].push({ id: crypto.randomUUID(), ...d }); save(c); render(); },
+    update: async (c, id, d) => { const a = state[stateKey(c)], i = a.findIndex(x => x.id === id); if (i > -1) a[i] = { ...a[i], ...d }; save(c); render(); },
+    remove: async (c, id) => { state[stateKey(c)] = state[stateKey(c)].filter(x => x.id !== id); save(c); render(); }
+  };
+  render();
+}
+
+async function initCloud() {
+  let abandoned = false;
+  try {
+    const base = `https://www.gstatic.com/firebasejs/${FB_VER}/`;
+    const [{ initializeApp }, fs] = await Promise.all([import(base + "firebase-app.js"), import(base + "firebase-firestore.js")]);
+    const app = initializeApp(firebaseConfig);
+    const db = fs.getFirestore(app);
+    import(base + "firebase-analytics.js").then(m => m.isSupported().then(ok => ok && m.getAnalytics(app))).catch(() => {});
+
+    const listen = (c, key) => new Promise((res, rej) => {
+      fs.onSnapshot(fs.collection(db, c), snap => {
+        if (abandoned) return;
+        state[key] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        res(); if (state.mode === "cloud") render();
+      }, rej);
+    });
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8000));
+    await Promise.race([Promise.all([listen(COL.payments, "payments"), listen(COL.holdings, "holdings")]), timeout]);
+
+    store = {
+      add: (c, d) => fs.addDoc(fs.collection(db, c), { ...d, createdAt: fs.serverTimestamp() }),
+      update: (c, id, d) => fs.updateDoc(fs.doc(db, c, id), d),
+      remove: (c, id) => fs.deleteDoc(fs.doc(db, c, id))
+    };
+    state.mode = "cloud"; render();
+  } catch (e) {
+    abandoned = true; console.warn("Firestore unavailable:", e);
+    const denied = e && e.code === "permission-denied";
+    useLocal(denied
+      ? "<b>Firestore refused access.</b> Your security rules are blocking reads. In the Firebase console open Firestore Database → Rules and allow access to the <code>dividends</code> and <code>holdings</code> collections. Until then, entries are saved in this browser only."
+      : "<b>Couldn't reach Firestore.</b> Check that a Firestore database exists for this project and that you're online. Until then, entries are saved in this browser only.");
+  }
+}
+
+/* ───────── Calculations ───────── */
+function stats() {
+  const now = new Date(), y = now.getFullYear(), today = iso(now);
+  const ttmStart = iso(new Date(y - 1, now.getMonth(), now.getDate() + 1));
+  const lastYtdEnd = iso(new Date(y - 1, now.getMonth(), now.getDate()));
+  const P = state.payments;
+  const ytd = sum(P.filter(p => p.date.startsWith(y + "-") && p.date <= today), p => p.amount);
+  const prevYtd = sum(P.filter(p => p.date.startsWith((y - 1) + "-") && p.date <= lastYtdEnd), p => p.amount);
+  const ttmList = P.filter(p => p.date >= ttmStart && p.date <= today);
+  const ttm = sum(ttmList, p => p.amount);
+  const projected = sum(state.holdings, h => h.shares * h.dps);
+  const cost = sum(state.holdings, h => h.shares * h.cost);
+  return { y, total: sum(P, p => p.amount), ytd, prevYtd, ttm, ttmList, projected, cost, yoc: cost ? projected / cost : NaN };
+}
+
+function series() {
+  const now = new Date(), P = state.payments, out = [];
+  if (state.range === "year") {
+    const by = {}; P.forEach(p => { const k = p.date.slice(0, 4); by[k] = (by[k] || 0) + p.amount; });
+    const ys = Object.keys(by).sort(); if (!ys.length) ys.push(String(now.getFullYear()));
+    for (let k = +ys[0]; k <= Math.max(+ys.at(-1), now.getFullYear()); k++) out.push({ label: String(k), full: String(k), v: by[k] || 0, now: k === now.getFullYear() });
+    return out.slice(-12);
+  }
+  const by = {}; P.forEach(p => { const k = p.date.slice(0, 7); by[k] = (by[k] || 0) + p.amount; });
+  for (let i = 0; i < 12; i++) {
+    const d = state.range === "ytd" ? new Date(now.getFullYear(), i, 1) : new Date(now.getFullYear(), now.getMonth() - 11 + i, 1);
+    const k = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+    out.push({ label: MONTHS[d.getMonth()], full: `${MONTHS[d.getMonth()]} ${d.getFullYear()}`, v: by[k] || 0,
+      now: d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear() });
+  }
+  return out;
+}
+
+/* ───────── Views ───────── */
+function viewDashboard() {
+  if (!state.payments.length && !state.holdings.length) return emptyState();
+  const s = stats(), data = series(), max = Math.max(...data.map(d => d.v), 1);
+  let delta = "";
+  if (s.prevYtd > 0) { const ch = (s.ytd - s.prevYtd) / s.prevYtd; delta = `<span class="delta ${ch >= 0 ? "up" : "down"}">${ch >= 0 ? "▲" : "▼"} ${Math.abs(ch * 100).toFixed(1)}%</span> vs same point last year`; }
+  else delta = `${state.payments.filter(p => p.date.startsWith(s.y + "-")).length} payments this year`;
+
+  const byT = {}; s.ttmList.forEach(p => { (byT[p.ticker] ??= { v: 0, n: 0 }); byT[p.ticker].v += p.amount; byT[p.ticker].n++; });
+  const top = Object.entries(byT).sort((a, b) => b[1].v - a[1].v).slice(0, 6), topMax = top[0]?.[1].v || 1;
+  const recent = [...state.payments].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
+  const rangeLabel = { "12m": "Last 12 months", ytd: `Calendar ${s.y}`, year: "By year" }[state.range];
+
+  return `
+  <section class="kpis">
+    <div class="card kpi hero"><div class="label">Income this year</div><div class="value">${usd(s.ytd)}</div><div class="sub">${delta}</div></div>
+    <div class="card kpi"><div class="label">Last 12 months</div><div class="value">${usd(s.ttm)}</div><div class="sub"><span class="num">${usd(s.ttm / 12)}</span> / month avg</div></div>
+    <div class="card kpi"><div class="label">Projected annual</div><div class="value">${state.holdings.length ? usd(s.projected) : "—"}</div><div class="sub">${state.holdings.length ? `Yield on cost <span class="num">${pct(s.yoc)}</span>` : "Add holdings to project"}</div></div>
+    <div class="card kpi"><div class="label">All-time received</div><div class="value">${usd(s.total)}</div><div class="sub">${state.payments.length} payments · ${new Set(state.payments.map(p => p.ticker)).size} tickers</div></div>
+  </section>
+  <section class="grid2">
+    <div class="card panel">
+      <div class="panel-head"><h2>Dividend income</h2><span class="hint hide-sm">${rangeLabel}</span>
+        <div class="seg" role="group" aria-label="Chart range">
+          ${[["12m","12M"],["ytd",s.y],["year","Years"]].map(([k, l]) => `<button data-range="${k}" aria-pressed="${state.range === k}">${l}</button>`).join("")}
+        </div>
+      </div>
+      <div class="chart" role="img" aria-label="Dividend income bar chart, ${rangeLabel}">
+        ${data.map(d => { const h = d.v / max * 100; return `<div class="col${d.now ? " now" : ""}" style="--h:${(h * 1.74).toFixed(0)}px"><span class="tip num">${esc(d.full)} · ${usd(d.v)}</span><div class="bar${d.v ? "" : " zero"}" style="height:${h.toFixed(1)}%"></div><span class="lbl">${d.label}</span></div>`; }).join("")}
+      </div>
+    </div>
+    <div class="card panel">
+      <div class="panel-head"><h2>Top payers</h2><span class="hint">12 months</span></div>
+      ${top.length ? `<div class="rank">${top.map(([t, o]) => `
+        <div class="rank-row">${badge(t)}
+          <div><div class="tk-name">${esc(t)}</div><div class="tk-sub">${o.n} payment${o.n > 1 ? "s" : ""} · ${(o.v / s.ttm * 100).toFixed(0)}%</div></div>
+          <div class="num">${usd(o.v)}</div>
+          <div class="track"><div class="fill" style="width:${(o.v / topMax * 100).toFixed(1)}%"></div></div>
+        </div>`).join("")}</div>` : `<p class="muted">No payments in the last 12 months.</p>`}
+    </div>
+  </section>
+  <section class="card">
+    <div class="panel-head" style="padding:20px 22px 0;margin-bottom:6px"><h2>Recent payments</h2><button class="btn sm ghost" data-goto="payments">View all</button></div>
+    ${recent.length ? `<div class="table-wrap"><table><tbody>${recent.map(p => `
+      <tr><td><div class="cell-tk">${badge(p.ticker)}<div><div class="tk-name">${esc(p.ticker)}</div><div class="tk-sub">${fmtDate(p.date)}</div></div></div></td>
+      <td class="muted hide-sm">${esc(p.account || "")}</td><td class="r num amt">+${usd(p.amount)}</td></tr>`).join("")}</tbody></table></div>`
+      : `<div class="empty" style="padding:30px">No payments logged yet.</div>`}
+  </section>`;
+}
+
+function emptyState() {
+  return `<div class="card empty">${ICON.coin}
+    <div class="big">Start tracking your dividends</div>
+    <div>Log each payment as it lands, and add your holdings to see projected income.</div>
+    <div class="actions"><button class="btn primary" data-add="pay">Add first dividend</button><button class="btn" data-sample>Load sample data</button></div></div>`;
+}
+
+function viewPayments() {
+  const years = [...new Set(state.payments.map(p => p.date.slice(0, 4)))].sort().reverse();
+  const q = state.q.trim().toLowerCase();
+  let rows = state.payments.filter(p => (state.year === "all" || p.date.startsWith(state.year)) &&
+    (!q || [p.ticker, p.account, p.notes].some(v => (v || "").toLowerCase().includes(q))));
+  const k = state.sortK, d = state.sortD;
+  rows.sort((a, b) => (k === "amount" ? a.amount - b.amount : String(a[k] || "").localeCompare(String(b[k] || ""))) * d || b.date.localeCompare(a.date));
+  const arrow = c => (k === c ? (d > 0 ? " ↑" : " ↓") : "");
+  return `
+  <div class="toolbar">
+    <input class="input search" id="q" type="search" placeholder="Search ticker, account, notes" value="${esc(state.q)}" aria-label="Search payments">
+    <select class="input" id="year" aria-label="Filter by year"><option value="all">All years</option>${years.map(y => `<option ${state.year === y ? "selected" : ""}>${y}</option>`).join("")}</select>
+    <span class="spacer"></span>
+    <button class="btn" id="csv" ${state.payments.length ? "" : "disabled"}>Export CSV</button>
+  </div>
+  <div class="card"><div class="table-wrap">${rows.length ? `<table>
+    <thead><tr><th class="sortable" data-sort="date">Date${arrow("date")}</th><th class="sortable" data-sort="ticker">Ticker${arrow("ticker")}</th>
+      <th class="sortable hide-sm" data-sort="account">Account${arrow("account")}</th><th class="hide-sm">Notes</th><th class="sortable r" data-sort="amount">Amount${arrow("amount")}</th><th></th></tr></thead>
+    <tbody>${rows.map(p => `<tr>
+      <td class="num muted" style="white-space:nowrap">${fmtDate(p.date)}</td>
+      <td><div class="cell-tk">${badge(p.ticker)}<span class="tk-name">${esc(p.ticker)}</span></div></td>
+      <td class="hide-sm">${p.account ? `<span class="tag">${esc(p.account)}</span>` : ""}</td>
+      <td class="muted hide-sm">${esc(p.notes || "")}</td>
+      <td class="r num amt">+${usd(p.amount)}</td>
+      <td class="r"><span class="row-actions"><button data-edit-pay="${esc(p.id)}" aria-label="Edit ${esc(p.ticker)} payment">${ICON.edit}</button></span></td></tr>`).join("")}</tbody>
+    <tfoot><tr><td colspan="2">${rows.length} payment${rows.length > 1 ? "s" : ""}</td><td class="hide-sm"></td><td class="hide-sm"></td><td class="r num">${usd(sum(rows, p => p.amount))}</td><td></td></tr></tfoot>
+  </table>` : `<div class="empty"><div class="big">${state.payments.length ? "No matches" : "No payments yet"}</div>
+      <div>${state.payments.length ? "Try a different search or year." : "Log your first dividend to get started."}</div>
+      ${state.payments.length ? "" : `<div class="actions"><button class="btn primary" data-add="pay">Add dividend</button></div>`}</div>`}</div></div>`;
+}
+
+function viewHoldings() {
+  const s = stats(), H = [...state.holdings].sort((a, b) => b.shares * b.dps - a.shares * a.dps);
+  const FREQ = { 12: "Monthly", 4: "Quarterly", 2: "Semi-annual", 1: "Annual" };
+  return `
+  <div class="toolbar"><div class="muted">Projected income is shares × annual dividend per share, which you enter and keep current.</div><span class="spacer"></span>
+    <button class="btn primary" data-add="hold">Add holding</button></div>
+  <div class="card"><div class="table-wrap">${H.length ? `<table>
+    <thead><tr><th>Holding</th><th class="r">Shares</th><th class="r hide-sm">Avg cost</th><th class="r hide-sm">Div / share</th><th class="r">Yield on cost</th><th class="hide-sm">Pays</th><th class="r">Annual income</th><th></th></tr></thead>
+    <tbody>${H.map(h => { const inc = h.shares * h.dps; return `<tr>
+      <td><div class="cell-tk">${badge(h.ticker)}<div><div class="tk-name">${esc(h.ticker)}</div><div class="tk-sub">${esc(h.name || "")}</div></div></div></td>
+      <td class="r num">${(+h.shares).toLocaleString("en-US", { maximumFractionDigits: 4 })}</td>
+      <td class="r num hide-sm">${h.cost ? usd(h.cost) : "—"}</td>
+      <td class="r num hide-sm">${h.dps ? usd(h.dps, h.dps < 1 ? 4 : 2) : "—"}</td>
+      <td class="r num">${h.cost && h.dps ? pct(h.dps / h.cost) : "—"}</td>
+      <td class="hide-sm"><span class="tag">${FREQ[h.freq] || "Quarterly"}</span></td>
+      <td class="r"><div class="num amt">${usd(inc)}</div><div class="tk-sub num">${usd(inc / (h.freq || 4))} / payment</div></td>
+      <td class="r"><span class="row-actions"><button data-edit-hold="${esc(h.id)}" aria-label="Edit ${esc(h.ticker)}">${ICON.edit}</button></span></td></tr>`; }).join("")}</tbody>
+    <tfoot><tr><td>${H.length} holding${H.length > 1 ? "s" : ""}</td><td></td><td class="r num hide-sm">${usd(s.cost)}</td><td class="hide-sm"></td><td class="r num">${pct(s.yoc)}</td><td class="hide-sm"></td>
+      <td class="r"><div class="num">${usd(s.projected)}</div><div class="tk-sub num">${usd(s.projected / 12)} / month</div></td><td></td></tr></tfoot>
+  </table>` : `<div class="empty"><div class="big">No holdings yet</div><div>Add what you own to see projected annual income and yield on cost.</div>
+      <div class="actions"><button class="btn primary" data-add="hold">Add holding</button></div></div>`}</div></div>`;
+}
+
+function render() {
+  const st = $("#status");
+  st.className = "pill " + state.mode;
+  $("#statusText").textContent = { connecting: "Connecting…", cloud: "Synced to Firebase", local: "Saved on this device" }[state.mode];
+  $("#cPay").textContent = state.payments.length; $("#cHold").textContent = state.holdings.length;
+  $("#banner").innerHTML = state.banner ? `<div class="banner"><div>${state.banner}</div><button aria-label="Dismiss" id="banX">×</button></div>` : "";
+  document.querySelectorAll("nav.tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === state.tab));
+  if (state.mode === "connecting") return;
+  const active = document.activeElement?.id, pos = document.activeElement?.selectionStart;
+  $("#view").innerHTML = { dashboard: viewDashboard, payments: viewPayments, holdings: viewHoldings }[state.tab]();
+  if (active === "q") { const el = $("#q"); el.focus(); el.setSelectionRange(pos, pos); }
+  $("#tickers").innerHTML = [...new Set([...state.holdings, ...state.payments].map(x => x.ticker))].sort().map(t => `<option value="${esc(t)}">`).join("");
+  $("#accounts").innerHTML = [...new Set(state.payments.map(p => p.account).filter(Boolean))].sort().map(t => `<option value="${esc(t)}">`).join("");
+}
+
+/* ───────── Dialogs ───────── */
+let editing = null;
+function armDelete(btn) { btn.hidden = !editing; btn.textContent = "Delete"; btn.dataset.armed = ""; }
+function openPay(id) {
+  const p = state.payments.find(x => x.id === id); editing = p ? id : null;
+  $("#payTitle").textContent = p ? "Edit dividend" : "Add dividend";
+  $("#pTicker").value = p?.ticker || ""; $("#pAmount").value = p?.amount ?? ""; $("#pDate").value = p?.date || iso(new Date());
+  $("#pAccount").value = p?.account || ""; $("#pNotes").value = p?.notes || ""; $("#payErr").textContent = "";
+  armDelete($("#payDel")); $("#payDlg").showModal(); $("#pTicker").focus();
+}
+function openHold(id) {
+  const h = state.holdings.find(x => x.id === id); editing = h ? id : null;
+  $("#holdTitle").textContent = h ? "Edit holding" : "Add holding";
+  $("#hTicker").value = h?.ticker || ""; $("#hName").value = h?.name || ""; $("#hShares").value = h?.shares ?? "";
+  $("#hCost").value = h?.cost || ""; $("#hDps").value = h?.dps || ""; $("#hFreq").value = h?.freq || 4; $("#holdErr").textContent = "";
+  armDelete($("#holdDel")); $("#holdDlg").showModal(); $("#hTicker").focus();
+}
+async function commit(dlg, errEl, fn, msg) {
+  try { await fn(); $(dlg).close(); toast(msg); }
+  catch (e) { console.error(e); $(errEl).textContent = e?.code === "permission-denied" ? "Firestore rules blocked this write." : "Couldn't save. Please try again."; }
+}
+$("#payForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const d = { ticker: $("#pTicker").value.trim().toUpperCase(), amount: Math.round(parseFloat($("#pAmount").value) * 100) / 100,
+    date: $("#pDate").value, account: $("#pAccount").value.trim(), notes: $("#pNotes").value.trim() };
+  if (!d.ticker) return $("#payErr").textContent = "Enter a ticker.";
+  if (!(d.amount > 0)) return $("#payErr").textContent = "Enter an amount greater than zero.";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date)) return $("#payErr").textContent = "Pick a pay date.";
+  commit("#payDlg", "#payErr", () => editing ? store.update(COL.payments, editing, d) : store.add(COL.payments, d), editing ? "Dividend updated" : `Added ${usd(d.amount)} from ${d.ticker}`);
+});
+$("#holdForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const n = id => parseFloat($(id).value) || 0;
+  const d = { ticker: $("#hTicker").value.trim().toUpperCase(), name: $("#hName").value.trim(), shares: n("#hShares"), cost: n("#hCost"), dps: n("#hDps"), freq: +$("#hFreq").value };
+  if (!d.ticker) return $("#holdErr").textContent = "Enter a ticker.";
+  if (!(d.shares > 0)) return $("#holdErr").textContent = "Enter the number of shares.";
+  if (!editing && state.holdings.some(h => h.ticker === d.ticker)) return $("#holdErr").textContent = `${d.ticker} is already in your holdings. Edit it instead.`;
+  commit("#holdDlg", "#holdErr", () => editing ? store.update(COL.holdings, editing, d) : store.add(COL.holdings, d), editing ? "Holding updated" : `Added ${d.ticker}`);
+});
+function wireDelete(btn, col, dlg, err) {
+  $(btn).addEventListener("click", () => {
+    const b = $(btn);
+    if (!b.dataset.armed) { b.dataset.armed = "1"; b.textContent = "Click again to delete"; return; }
+    commit(dlg, err, () => store.remove(col, editing), "Deleted");
+  });
+}
+wireDelete("#payDel", COL.payments, "#payDlg", "#payErr");
+wireDelete("#holdDel", COL.holdings, "#holdDlg", "#holdErr");
+document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", () => b.closest("dialog").close()));
+document.querySelectorAll("dialog").forEach(d => d.addEventListener("click", e => { if (e.target === d) d.close(); }));
+
+/* ───────── Sample data & export ───────── */
+async function loadSample() {
+  const H = [["SCHD","Schwab US Dividend Equity",120,24.5,1.04,4],["O","Realty Income",85,54.2,3.22,12],["JNJ","Johnson & Johnson",30,152,5.2,4],["KO","Coca-Cola",75,58.4,2.04,4],["VYM","Vanguard High Dividend Yield",40,108,4.35,4]];
+  const now = new Date(), jobs = [];
+  H.forEach(([ticker, name, shares, cost, dps, freq]) => jobs.push(store.add(COL.holdings, { ticker, name, shares, cost, dps, freq })));
+  for (let i = 0; i < 20; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    H.forEach(([ticker, , shares, , dps, freq], j) => {
+      if (freq === 4 && (d.getMonth() + j) % 3) return;
+      const day = new Date(d.getFullYear(), d.getMonth(), 5 + j * 4); if (day > now) return;
+      const growth = 1 - i * 0.006;
+      jobs.push(store.add(COL.payments, { ticker, amount: Math.round(shares * dps / freq * growth * 100) / 100, date: iso(day), account: j % 2 ? "Roth IRA" : "Brokerage", notes: "Sample" }));
+    });
+  }
+  try { await Promise.all(jobs); toast("Sample data loaded"); } catch (e) { console.error(e); toast("Couldn't load sample data"); }
+}
+function exportCsv() {
+  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const rows = [["Date","Ticker","Amount","Account","Notes"], ...[...state.payments].sort((a, b) => a.date.localeCompare(b.date)).map(p => [p.date, p.ticker, p.amount, p.account, p.notes])];
+  const url = URL.createObjectURL(new Blob([rows.map(r => r.map(q).join(",")).join("\n")], { type: "text/csv" }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: `dividends-${iso(new Date())}.csv` });
+  document.body.append(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+/* ───────── Events ───────── */
+document.addEventListener("click", e => {
+  const t = e.target.closest("button, th.sortable"); if (!t) return;
+  if (t.dataset.tab) { state.tab = t.dataset.tab; render(); }
+  else if (t.dataset.goto) { state.tab = t.dataset.goto; render(); }
+  else if (t.dataset.range) { state.range = t.dataset.range; render(); }
+  else if (t.dataset.sort) { state.sortD = state.sortK === t.dataset.sort ? -state.sortD : (t.dataset.sort === "ticker" || t.dataset.sort === "account" ? 1 : -1); state.sortK = t.dataset.sort; render(); }
+  else if (t.dataset.add === "hold") openHold();
+  else if (t.dataset.add === "pay" || t.id === "addBtn") { if (store) openPay(); }
+  else if (t.dataset.editPay) openPay(t.dataset.editPay);
+  else if (t.dataset.editHold) openHold(t.dataset.editHold);
+  else if ("sample" in t.dataset) { t.disabled = true; loadSample(); }
+  else if (t.id === "csv") exportCsv();
+  else if (t.id === "banX") { state.banner = ""; render(); }
+  else if (t.id === "themeBtn") { const n = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = n; try { localStorage.setItem("dt_theme", n); } catch {} }
+});
+document.addEventListener("input", e => { if (e.target.id === "q") { state.q = e.target.value; render(); } });
+document.addEventListener("change", e => { if (e.target.id === "year") { state.year = e.target.value; render(); } });
+
+try { const th = localStorage.getItem("dt_theme"); if (th) document.documentElement.dataset.theme = th; } catch {}
+$("#today").textContent = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+render();
+initCloud();
+</script>
+</body>
+</html>
