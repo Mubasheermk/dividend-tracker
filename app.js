@@ -591,11 +591,12 @@ function viewInsights() {
   // 2. dividend health
   const seen = new Set(), rows = pos.filter(p => !seen.has(p.ticker) && seen.add(p.ticker)).sort((a, b) => b.income - a.income).map(p => {
     const m = state.ins.metrics[p.ticker] || {}, ch = raiseVsLastYear(p.ticker, +p.freq || 4), pay = m.payoutRatioTTM ?? m.payoutRatioAnnual, g5 = m.dividendGrowthRate5Y;
-    const tag = ch == null ? '<span class="muted">—</span>' : ch > 0.005 ? `<span class="delta up">Raised ${spct(ch * 100)}</span>` : ch < -0.005 ? `<span class="delta down">Cut ${spct(ch * 100)}</span>` : '<span class="tag">Unchanged</span>';
+    const big = x => (Math.abs(x) >= 1 ? (x > 0 ? "+" : "−") + Math.round(Math.abs(x) * 100).toLocaleString("en-US") + "%" : spct(x * 100));
+    const tag = ch == null ? '<span class="muted">—</span>' : ch > 0.005 ? `<span class="delta up"${ch >= 1 ? ' title="A jump this large can be a real increase, or a share split in the dividend history"' : ""}>Raised ${big(ch)}${ch >= 1 ? " *" : ""}</span>` : ch < -0.005 ? `<span class="delta down">Cut ${big(ch)}</span>` : '<span class="tag">Unchanged</span>';
     const payTag = pay == null || !isFinite(pay) ? '<span class="muted">—</span>' : `<span class="num ${pay > 100 ? "down" : ""}">${(+pay).toFixed(0)}%</span>${pay > 100 ? ' <span class="delta down">Above earnings</span>' : pay > 75 ? ' <span class="tag warn">High</span>' : ""}`;
     return `<tr><td><div class="cell-tk">${badge(p.ticker)}<div><div class="tk-name">${esc(p.ticker)}</div><div class="tk-sub">${esc(p.name || "")}</div></div></div></td>
       <td class="r num">${p.dps ? usd(p.dps, p.dps < 1 ? 4 : 2) : "—"}</td><td class="r">${tag}</td>
-      <td class="r num hide-sm ${g5 != null && isFinite(g5) ? cls(g5) : "muted"}">${g5 != null && isFinite(g5) ? spct(+g5) + " / yr" : "—"}</td><td class="r">${payTag}</td><td class="r num hide-sm">${pct(p.yoc)}</td></tr>`; }).join("");
+      <td class="r num hide-sm ${g5 != null && isFinite(g5) ? cls(g5) : "muted"}">${g5 != null && isFinite(g5) ? spct(+g5) + " / yr" : "—"}</td><td class="r">${payTag}</td><td class="r hide-sm"><div class="num">${pct(p.yld)}</div>${isFinite(p.yoc) ? `<div class="tk-sub num">${pct(p.yoc)} on cost</div>` : ""}</td></tr>`; }).join("");
   const srcNote = [settings().massiveKey ? "" : "Add a Massive key in Settings to compare each dividend with a year ago.", settings().finnhubKey ? "" : "Add a Finnhub key for 5-year growth and payout ratio."].filter(Boolean).join(" ");
   // 3. projection
   const P = state.proj, v0 = s.value || s.basis, y0 = v0 ? s.projected / v0 : 0, Y = 20;
@@ -616,8 +617,8 @@ function viewInsights() {
   return `
   <section class="card panel" style="margin-bottom:16px"><div class="panel-head"><h2>Income by calendar month</h2><span class="hint">Next 12 months, expected</span></div>${coverage}</section>
   <section class="card" style="margin-bottom:16px"><div class="panel-head" style="padding:20px 22px 0;margin-bottom:8px"><h2>Dividend health</h2><span class="hint">${state.ins.busy ? "Loading…" : "Per holding"}</span></div>
-    <div class="table-wrap"><table><thead><tr><th>Holding</th><th class="r">Div / share</th><th class="r">Vs a year ago</th><th class="r hide-sm">5-year growth</th><th class="r">Payout ratio</th><th class="r hide-sm">Yield on cost</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <p class="muted" style="padding:0 22px 18px;margin:10px 0 0;font-size:12.5px">Payout ratio is dividends as a share of earnings; above 100% means the company pays out more than it earns. Funds usually have no payout ratio. ${srcNote}</p></section>
+    <div class="table-wrap"><table><thead><tr><th>Holding</th><th class="r">Div / share</th><th class="r">Vs a year ago</th><th class="r hide-sm">5-year growth</th><th class="r">Payout ratio</th><th class="r hide-sm">Yield</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted" style="padding:0 22px 18px;margin:10px 0 0;font-size:12.5px">Payout ratio is dividends as a share of earnings; above 100% means the company pays out more than it earns. Funds usually have no payout ratio or growth figure. A dash under "Vs a year ago" means there isn't a full year of dividend history for that holding yet. * A very large jump can be a real increase or a share split in the history. ${srcNote}</p></section>
   <section class="card panel"><div class="panel-head"><h2>Income projection</h2><span class="hint">20 years</span></div>${projection}</section>`;
 }
 
