@@ -15,7 +15,8 @@ const COLS = { dividends: "payments", holdings: "holdings", transactions: "txns"
 /* ───────── State & helpers ───────── */
 const state = { payments: [], holdings: [], txns: [], watch: [], settingsDocs: [], snapshots: [],
   mode: "connecting", tab: "dashboard", acct: "all", range: "12m", alloc: "holding", q: "", year: "all", sortK: "date", sortD: -1,
-  banner: "", divMsg: "", calMonth: "", calDay: "", quotes: {}, earnings: [], market: { tab: "news", news: null, ipos: null, busy: false }, apiErr: "", busy: false };
+  banner: "", divMsg: "", calMonth: "", calDay: "", quotes: {}, earnings: [], market: { tab: "news", news: null, ipos: null, busy: false }, apiErr: "", busy: false,
+  ins: { metrics: {}, busy: false }, proj: (() => { const d = { contrib: 500, g: 5, a: 4 }; try { return { ...d, ...JSON.parse(localStorage.getItem("dt_proj")) }; } catch { return d; } })() };
 let store = null;
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
@@ -197,8 +198,8 @@ async function mvDividends(t) {
     if (!r.ok) throw new Error("Massive request failed (" + r.status + ").");
     return (await r.json()).results || [];
   };
-  if (!mvOld) try { return await get(`${MV}/stocks/v1/dividends?${q}&limit=12&sort=ex_dividend_date.desc${k}`); } catch (e) { if (e.rate) throw e; console.warn("New Massive endpoint failed, trying the older one:", e.message); mvOld = true; }
-  return get(`${MV}/v3/reference/dividends?${q}&limit=12&order=desc&sort=ex_dividend_date${k}`);
+  if (!mvOld) try { return await get(`${MV}/stocks/v1/dividends?${q}&limit=14&sort=ex_dividend_date.desc${k}`); } catch (e) { if (e.rate) throw e; console.warn("New Massive endpoint failed, trying the older one:", e.message); mvOld = true; }
+  return get(`${MV}/v3/reference/dividends?${q}&limit=14&order=desc&sort=ex_dividend_date${k}`);
 }
 async function applyDividends(t, recs) {
   const R = recs.filter(r => r.cash_amount > 0 && r.ex_dividend_date && (!r.distribution_type || r.distribution_type === "recurring") && (!r.dividend_type || r.dividend_type === "CD"))
@@ -552,7 +553,75 @@ function viewMarket() {
   return head + body;
 }
 
-const VIEWS = { dashboard: viewDashboard, portfolio: viewPortfolio, dividends: viewDividends, calendar: viewCalendar, watchlist: viewWatchlist, market: viewMarket };
+/* ───────── Insights ───────── */
+async function loadInsights() {
+  const I = state.ins; if (I.busy || !settings().finnhubKey) return;
+  I.busy = true; render();
+  try { await pool(uniq(state.holdings.map(h => h.ticker)).filter(t => !I.metrics[t]), async t => { const r = await fh("/stock/metric", { symbol: t, metric: "all" }, 1440); I.metrics[t] = r?.metric || {}; }); }
+  catch (e) { console.warn(e); state.apiErr = e.message; }
+  I.busy = false; render();
+}
+/* Change in the regular dividend against the same payment a year earlier, from the cached Massive history */
+function raiseVsLastYear(t, f) {
+  try {
+    const R = (JSON.parse(localStorage.getItem("dt_mv:" + t))?.d || []).filter(r => r.cash_amount > 0 && r.ex_dividend_date && (!r.distribution_type || r.distribution_type === "recurring") && (!r.dividend_type || r.dividend_type === "CD"))
+      .sort((a, b) => b.ex_dividend_date.localeCompare(a.ex_dividend_date));
+    return R.length > f && R[f].cash_amount > 0 ? R[0].cash_amount / R[f].cash_amount - 1 : null;
+  } catch { return null; }
+}
+/* Yearly income for the next `years` years. Yield drifts with dividend growth g against price growth a */
+function projectIncome(v0, y0, monthly, g, a, years, drip) {
+  const out = []; let v = v0;
+  for (let t = 0; t <= years; t++) { const inc = v * y0 * Math.pow((1 + g) / (1 + a), t); out.push({ income: inc, value: v }); v = v * (1 + a) + monthly * 12 + (drip ? inc : 0); }
+  return out;
+}
+function viewInsights() {
+  const s = stats(), pos = s.pos.filter(p => p.shares > 0);
+  if (!pos.length) return `<div class="card empty"><div class="big">Add holdings to see insights</div><div>Coverage, dividend health and projections are worked out from your portfolio.</div>
+    <div class="actions"><button class="btn primary" data-act="add-hold">Add holding</button></div></div>`;
+  // 1. coverage by calendar month
+  const byM = Array(12).fill(0), who = Array.from({ length: 12 }, () => new Set());
+  schedule(12).filter(e => e.type === "proj" || e.type === "due").forEach(e => { const m = +e.date.slice(5, 7) - 1; byM[m] += e.amount; who[m].add(e.ticker); });
+  const tot = sum(byM), avg = tot / 12, mx = Math.max(...byM, 1), thin = byM.map((v, i) => [v, i]).filter(([v]) => v < avg * 0.6).map(([, i]) => MONTHS[i]);
+  const unsched = pos.filter(p => p.dps > 0 && !p.nextPay && !state.payments.some(x => x.ticker === p.ticker && (x.account || "") === (p.account || ""))).map(p => p.ticker);
+  const coverage = tot ? `<div class="chart" role="img" aria-label="Expected dividend income by calendar month">
+      ${byM.map((v, i) => { const h = v / mx * 100; return `<div class="col${v < avg * 0.6 ? " thin" : ""}" style="--h:${(h * 1.74).toFixed(0)}px"><span class="tip num">${MONTHS[i]} · ${usd(v)}${who[i].size ? " · " + esc([...who[i]].join(", ")) : ""}</span><div class="bar${v ? "" : " zero"}" style="height:${h.toFixed(1)}%"></div><span class="lbl">${MONTHS[i]}</span></div>`; }).join("")}</div>
+    <p class="muted" style="margin:14px 0 0;font-size:13.5px">Average <b class="num">${usd(avg)}</b> a month. ${thin.length ? `Thin months (under 60% of average): <b>${thin.join(", ")}</b>.` : "No thin months: income is spread evenly."}${unsched.length ? ` Not included, because they have no pay date yet: ${esc(unsched.join(", "))}.` : ""}</p>`
+    : `<p class="muted">No expected payments yet. Set a next pay date on your holdings, or add a Massive key in Settings to fill dates in automatically.</p>`;
+  // 2. dividend health
+  const seen = new Set(), rows = pos.filter(p => !seen.has(p.ticker) && seen.add(p.ticker)).sort((a, b) => b.income - a.income).map(p => {
+    const m = state.ins.metrics[p.ticker] || {}, ch = raiseVsLastYear(p.ticker, +p.freq || 4), pay = m.payoutRatioTTM ?? m.payoutRatioAnnual, g5 = m.dividendGrowthRate5Y;
+    const tag = ch == null ? '<span class="muted">—</span>' : ch > 0.005 ? `<span class="delta up">Raised ${spct(ch * 100)}</span>` : ch < -0.005 ? `<span class="delta down">Cut ${spct(ch * 100)}</span>` : '<span class="tag">Unchanged</span>';
+    const payTag = pay == null || !isFinite(pay) ? '<span class="muted">—</span>' : `<span class="num ${pay > 100 ? "down" : ""}">${(+pay).toFixed(0)}%</span>${pay > 100 ? ' <span class="delta down">Above earnings</span>' : pay > 75 ? ' <span class="tag warn">High</span>' : ""}`;
+    return `<tr><td><div class="cell-tk">${badge(p.ticker)}<div><div class="tk-name">${esc(p.ticker)}</div><div class="tk-sub">${esc(p.name || "")}</div></div></div></td>
+      <td class="r num">${p.dps ? usd(p.dps, p.dps < 1 ? 4 : 2) : "—"}</td><td class="r">${tag}</td>
+      <td class="r num hide-sm ${g5 != null && isFinite(g5) ? cls(g5) : "muted"}">${g5 != null && isFinite(g5) ? spct(+g5) + " / yr" : "—"}</td><td class="r">${payTag}</td><td class="r num hide-sm">${pct(p.yoc)}</td></tr>`; }).join("");
+  const srcNote = [settings().massiveKey ? "" : "Add a Massive key in Settings to compare each dividend with a year ago.", settings().finnhubKey ? "" : "Add a Finnhub key for 5-year growth and payout ratio."].filter(Boolean).join(" ");
+  // 3. projection
+  const P = state.proj, v0 = s.value || s.basis, y0 = v0 ? s.projected / v0 : 0, Y = 20;
+  const withD = projectIncome(v0, y0, +P.contrib || 0, P.g / 100, P.a / 100, Y, true), noD = projectIncome(v0, y0, +P.contrib || 0, P.g / 100, P.a / 100, Y, false), pmx = Math.max(...withD.map(x => x.income), 1);
+  const projection = v0 && y0 ? `
+    <div class="proj-inputs">
+      <label>Monthly contribution ($)<input class="input num" type="number" min="0" step="50" data-proj="contrib" value="${+P.contrib || 0}"></label>
+      <label>Dividend growth (% a year)<input class="input num" type="number" min="-20" max="30" step="0.5" data-proj="g" value="${P.g}"></label>
+      <label>Share price growth (% a year)<input class="input num" type="number" min="-20" max="30" step="0.5" data-proj="a" value="${P.a}"></label>
+    </div>
+    <div class="chart" style="height:200px" role="img" aria-label="Projected annual dividend income over 20 years, dividends reinvested">
+      ${withD.slice(1).map((x, i) => { const h = x.income / pmx * 100; return `<div class="col" style="--h:${(h * 1.44).toFixed(0)}px"><span class="tip num">Year ${i + 1} · ${usd(x.income, 0)} a year</span><div class="bar" style="height:${h.toFixed(1)}%"></div><span class="lbl">${(i + 1) % 5 === 0 || i === 0 ? i + 1 : "&nbsp;"}</span></div>`; }).join("")}</div>
+    <div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>After</th><th class="r">Income, reinvesting</th><th class="r">Income, taking cash</th><th class="r hide-sm">Portfolio, reinvesting</th></tr></thead><tbody>
+      ${[0, 5, 10, 20].map(n => `<tr><td><b>${n ? n + " years" : "Today"}</b></td><td class="r"><div class="num amt">${usd(withD[n].income, 0)}</div><div class="tk-sub num">${usd(withD[n].income / 12, 0)} / month</div></td>
+        <td class="r num">${usd(noD[n].income, 0)}</td><td class="r num hide-sm">${usd(withD[n].value, 0)}</td></tr>`).join("")}</tbody></table></div>
+    <p class="muted" style="margin:12px 0 0;font-size:12.5px">An illustration, not a forecast. It starts from today's ${s.value ? "portfolio value" : "invested amount"} of ${usd(v0, 0)} and yield of ${pct(y0)}, holds the growth rates constant, and ignores taxes and fees.</p>`
+    : `<p class="muted">Add dividend amounts to your holdings to project future income.</p>`;
+  return `
+  <section class="card panel" style="margin-bottom:16px"><div class="panel-head"><h2>Income by calendar month</h2><span class="hint">Next 12 months, expected</span></div>${coverage}</section>
+  <section class="card" style="margin-bottom:16px"><div class="panel-head" style="padding:20px 22px 0;margin-bottom:8px"><h2>Dividend health</h2><span class="hint">${state.ins.busy ? "Loading…" : "Per holding"}</span></div>
+    <div class="table-wrap"><table><thead><tr><th>Holding</th><th class="r">Div / share</th><th class="r">Vs a year ago</th><th class="r hide-sm">5-year growth</th><th class="r">Payout ratio</th><th class="r hide-sm">Yield on cost</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted" style="padding:0 22px 18px;margin:10px 0 0;font-size:12.5px">Payout ratio is dividends as a share of earnings; above 100% means the company pays out more than it earns. Funds usually have no payout ratio. ${srcNote}</p></section>
+  <section class="card panel"><div class="panel-head"><h2>Income projection</h2><span class="hint">20 years</span></div>${projection}</section>`;
+}
+
+const VIEWS = { dashboard: viewDashboard, portfolio: viewPortfolio, dividends: viewDividends, calendar: viewCalendar, insights: viewInsights, watchlist: viewWatchlist, market: viewMarket };
 function render() {
   $("#status").className = "pill " + state.mode;
   $("#statusText").textContent = { connecting: "Connecting…", cloud: "Synced to Firebase", local: "Saved on this device", signedout: "Not signed in" }[state.mode];
@@ -858,7 +927,7 @@ const ACTS = {
   backup: exportBackup, restore: () => $("#bakFile").click(),
   csv: exportCsv, import: () => $("#csvFile").click(), ics: exportIcs, dismiss: () => { state.banner = ""; state.apiErr = ""; render(); }
 };
-function go(tab) { state.tab = tab; render(); if (tab === "market") loadMarketTab(); window.scrollTo({ top: 0 }); }
+function go(tab) { state.tab = tab; render(); if (tab === "market") loadMarketTab(); if (tab === "insights") loadInsights(); window.scrollTo({ top: 0 }); }
 document.addEventListener("click", e => {
   const t = e.target.closest("button, th.sortable"); if (!t) return;
   const d = t.dataset;
@@ -877,6 +946,8 @@ document.addEventListener("input", e => { if (e.target.id === "q") { state.q = e
 document.addEventListener("change", e => {
   if (e.target.id === "year") { state.year = e.target.value; render(); }
   else if (e.target.id === "acct") { state.acct = e.target.value; render(); }
+  else if (e.target.dataset.proj) { const k = e.target.dataset.proj, v = parseFloat(e.target.value); state.proj[k] = isFinite(v) ? Math.max(k === "contrib" ? 0 : -20, Math.min(k === "contrib" ? 1e6 : 30, v)) : 0;
+    try { localStorage.setItem("dt_proj", JSON.stringify(state.proj)); } catch {} render(); }
   else if (e.target.id === "csvFile") { const f = e.target.files[0]; e.target.value = ""; if (f && store) importCsv(f); }
   else if (e.target.id === "bakFile") { const f = e.target.files[0]; e.target.value = ""; if (f && store) readBackup(f); }
 });

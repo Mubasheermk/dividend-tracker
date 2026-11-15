@@ -320,3 +320,12 @@ dialog h3{background:var(--brand); -webkit-background-clip:text; background-clip
 .due-actions{display:flex; gap:8px; margin-top:8px; flex-wrap:wrap}
 .backup{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:20px; padding:14px; border:1px solid var(--border); border-radius:12px; background:var(--surface2); font-size:13px}
 .backup > div:first-child{flex:1; min-width:200px}
+
+/* ── Insights ── */
+.chart .col.thin .bar{background:var(--border)!important; outline:1px dashed var(--orange)}
+.chart .col.thin .lbl{color:var(--orange)}
+.tag.warn{background:color-mix(in srgb, var(--gold) 22%, transparent); color:var(--gold)}
+.proj-inputs{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-bottom:18px}
+.proj-inputs label{display:flex; flex-direction:column; gap:6px; font-size:12px; font-weight:700; color:var(--muted)}
+.proj-inputs .input{background:var(--surface2); font-weight:500; color:var(--text)}
+@media (max-width:560px){ .proj-inputs{grid-template-columns:1fr} }
