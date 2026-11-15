@@ -8,7 +8,9 @@ A single-page web app for tracking dividend income, synced with Firebase Firesto
 
 - **Dashboard:** portfolio value and gains, income this year, projected annual income with a goal, next payout, income and forecast charts, allocation by holding or sector
 - **Portfolio:** holdings with buy/sell transactions, average cost, gains, yield and yield on cost; multiple portfolios with a filter
-- **Dividends:** payment log, income-by-month table with yearly growth, CSV import and export
+- **Dividends:** payment log, income-by-month table with yearly growth, CSV import and export; reinvested dividends (DRIP) add a buy transaction
+- **Mark as paid:** expected dividends that have come due can be confirmed or skipped in one click
+- **Backup:** download everything as one JSON file and restore it (merge or replace); API keys are not included
 - **Calendar:** paid and expected dividends, ex-dividend dates and earnings, with `.ics` export
 - **Watchlist:** live prices and target-price alerts shown in the app
 - **Market:** news for your holdings, earnings dates and upcoming IPOs

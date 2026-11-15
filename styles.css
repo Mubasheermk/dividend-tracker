@@ -312,3 +312,11 @@ tfoot td{background:color-mix(in srgb, var(--violet) 10%, var(--surface))}
 dialog h3{background:var(--brand); -webkit-background-clip:text; background-clip:text; color:transparent}
 .toast{background:var(--brand); color:#fff}
 @media (max-width:560px){ #logoutBtn{padding:9px 11px} }
+
+/* ── Mark as paid, backup ── */
+.ev.due{background:var(--orange); color:#fff}
+.agenda-row.is-due .datebox{background:color-mix(in srgb, var(--orange) 24%, var(--surface))}
+.agenda-row.is-due .datebox span{color:var(--orange)}
+.due-actions{display:flex; gap:8px; margin-top:8px; flex-wrap:wrap}
+.backup{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:20px; padding:14px; border:1px solid var(--border); border-radius:12px; background:var(--surface2); font-size:13px}
+.backup > div:first-child{flex:1; min-width:200px}

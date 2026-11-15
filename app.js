@@ -57,7 +57,7 @@ function useLocal(reason) {
   for (const c in COLS) state[COLS[c]] = LS.get(c);
   const save = c => LS.set(c, state[COLS[c]]);
   store = {
-    add: async (c, d) => { state[COLS[c]].push({ id: crypto.randomUUID(), ...d }); save(c); render(); },
+    add: async (c, d) => { const id = crypto.randomUUID(); state[COLS[c]].push({ id, ...d }); save(c); render(); return id; },
     update: async (c, id, d) => { const a = state[COLS[c]], i = a.findIndex(x => x.id === id); if (i > -1) a[i] = { ...a[i], ...d }; save(c); render(); },
     set: async (c, id, d) => { const a = state[COLS[c]], i = a.findIndex(x => x.id === id); if (i > -1) a[i] = { ...a[i], ...d }; else a.push({ id, ...d }); save(c); render(); },
     remove: async (c, id) => { state[COLS[c]] = state[COLS[c]].filter(x => x.id !== id); save(c); render(); }
@@ -104,7 +104,7 @@ async function startSync(user) {
     await Promise.race([Promise.all(Object.keys(COLS).map(listen)), timeout]);
     if (my !== session) return;
     store = {
-      add: (c, d) => fs.addDoc(col(c), { ...d, createdAt: fs.serverTimestamp() }),
+      add: async (c, d) => (await fs.addDoc(col(c), { ...d, createdAt: fs.serverTimestamp() })).id,
       update: (c, id, d) => fs.updateDoc(ref(c, id), d),
       set: (c, id, d) => fs.setDoc(ref(c, id), d, { merge: true }),
       remove: (c, id) => fs.deleteDoc(ref(c, id))
@@ -258,33 +258,34 @@ function positions(all) {
       received: sum(state.payments.filter(p => p.ticker === h.ticker && (p.account || "") === (h.account || "")), p => p.amount) };
   });
 }
-/* Projected pay dates and ex-dividend dates for the next `months` months */
+/* Projected pay dates and ex-dividend dates for the next `months` months, plus recent expected payments not yet logged ("due") */
+const DUE_DAYS = 21, NEAR = 12 * 864e5;
 function schedule(months = 12) {
-  const out = [], t0 = today(), end = iso(addMonths(new Date(), months));
+  const out = [], t0 = today(), end = iso(addMonths(new Date(), months)), back = addDays(t0, -DUE_DAYS), skips = settings().skips || {};
   for (const p of positions()) {
     if (!(p.shares > 0)) continue;
-    const f = +p.freq || 4, step = 12 / f;
-    const roll = (start, type, amount, est, strict) => {
-      const a = parse(start);
-      for (let k = 0; k < 400; k++) { const d = iso(addMonths(a, k * step, a.getDate())); if (d > end) break; if (strict ? d > t0 : d >= t0) out.push({ date: d, ticker: p.ticker, type, amount, est }); }
-    };
-    if (p.dps > 0) {
-      const last = state.payments.filter(x => x.ticker === p.ticker && (x.account || "") === (p.account || "")).map(x => x.date).sort().pop();
-      if (p.nextPay) roll(p.nextPay, "proj", p.income / f, false, false);
-      else if (last) roll(last, "proj", p.income / f, true, true);
-    }
-    if (p.exDate) roll(p.exDate, "ex", 0, false, false);
+    const f = +p.freq || 4, step = 12 / f, acct = p.account || "";
+    const paid = state.payments.filter(x => x.ticker === p.ticker && (x.account || "") === acct).map(x => x.date).sort();
+    const roll = (start, fn) => { const a = parse(start); for (let k = -60; k < 400; k++) { const d = iso(addMonths(a, k * step, a.getDate())); if (d > end) break; if (d >= back) fn(d); } };
+    const anchor = p.nextPay || paid.at(-1);
+    if (p.dps > 0 && anchor) roll(anchor, d => {
+      const base = { date: d, ticker: p.ticker, amount: p.income / f, account: acct, shares: p.shares };
+      if (d > t0) out.push({ ...base, type: "proj", est: !p.nextPay });
+      else if (!paid.some(x => Math.abs(parse(x) - parse(d)) <= NEAR) && !skips[`${p.ticker}|${acct}|${d}`]) out.push({ ...base, type: "due" });
+    });
+    if (p.exDate) roll(p.exDate, d => { if (d >= t0) out.push({ date: d, ticker: p.ticker, type: "ex", amount: 0 }); });
   }
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
+const dueList = () => schedule(1).filter(e => e.type === "due");
 function events() {
   const mine = new Set(allTickers());
   return [...state.payments.filter(inAcct).map(p => ({ date: p.date, ticker: p.ticker, type: "paid", amount: p.amount })), ...schedule(13),
     ...state.earnings.filter(e => mine.has(e.ticker)).map(e => ({ ...e, type: "earn" }))];
 }
-const evLabel = e => ({ paid: "Dividend received", proj: e.est ? "Dividend (estimated date)" : "Dividend expected", ex: "Ex-dividend date",
+const evLabel = e => ({ due: "Expected dividend, not logged yet", paid: "Dividend received", proj: e.est ? "Dividend (estimated date)" : "Dividend expected", ex: "Ex-dividend date",
   earn: "Earnings" + ({ bmo: " · before open", amc: " · after close" }[e.hour] || "") }[e.type]);
-const upcoming = (n, days = 120) => { const t0 = today(), end = addDays(t0, days); return events().filter(e => e.type !== "paid" && e.date >= t0 && e.date <= end).sort((a, b) => a.date.localeCompare(b.date)).slice(0, n); };
+const upcoming = (n, days = 120) => { const t0 = today(), end = addDays(t0, days); return events().filter(e => e.type !== "paid" && e.type !== "due" && e.date >= t0 && e.date <= end).sort((a, b) => a.date.localeCompare(b.date)).slice(0, n); };
 
 function stats() {
   const now = new Date(), y = now.getFullYear(), t0 = today();
@@ -302,7 +303,7 @@ function stats() {
 function series(P) {
   const now = new Date(), out = [];
   if (state.range === "fc") {
-    const by = {}; schedule(12).filter(e => e.type === "proj").forEach(e => { const k = e.date.slice(0, 7); by[k] = (by[k] || 0) + e.amount; });
+    const by = {}; schedule(12).filter(e => e.type === "proj" || e.type === "due").forEach(e => { const k = e.date.slice(0, 7); by[k] = (by[k] || 0) + e.amount; });
     for (let i = 0; i < 12; i++) { const d = new Date(now.getFullYear(), now.getMonth() + i, 1), k = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
       out.push({ label: MONTHS[d.getMonth()], full: `${MONTHS[d.getMonth()]} ${d.getFullYear()} (projected)`, v: by[k] || 0, now: i === 0 }); }
     return out;
@@ -327,10 +328,13 @@ const needKey = what => `<div class="card empty"><div class="big">${what} needs 
   <div>Add a free Finnhub API key in Settings to turn on live prices, earnings dates, news and IPOs.</div>
   <div class="actions"><button class="btn primary" data-act="settings">Open Settings</button></div></div>`;
 function agendaRows(list) {
-  return list.map(e => { const d = parse(e.date); return `<div class="agenda-row">
+  return list.map(e => { const d = parse(e.date), due = e.type === "due";
+    const attrs = `data-t="${esc(e.ticker)}" data-a="${esc(e.account || "")}" data-d="${e.date}" data-amt="${(e.amount || 0).toFixed(2)}" data-sh="${e.shares || ""}"`;
+    return `<div class="agenda-row${due ? " is-due" : ""}">
     <div class="datebox"><span>${MONTHS[d.getMonth()]}</span><b class="num">${d.getDate()}</b></div>
-    <div><div class="tk-name">${esc(e.ticker)} <span class="ev ${e.type}">${{ paid: "Paid", proj: "Dividend", ex: "Ex-date", earn: "Earnings" }[e.type]}</span></div><div class="tk-sub">${evLabel(e)}</div></div>
-    <div class="num ${e.type === "paid" ? "amt" : ""}">${e.amount ? (e.type === "proj" ? "~" : "+") + usd(e.amount) : e.type === "earn" && e.eps != null ? "EPS est. " + (+e.eps).toFixed(2) : ""}</div></div>`; }).join("");
+    <div><div class="tk-name">${esc(e.ticker)} <span class="ev ${e.type}">${{ due: "Due", paid: "Paid", proj: "Dividend", ex: "Ex-date", earn: "Earnings" }[e.type]}</span></div><div class="tk-sub">${evLabel(e)}</div>
+      ${due ? `<div class="due-actions"><button class="btn sm primary" data-act="paid" ${attrs}>Mark as paid</button><button class="btn sm ghost" data-act="skip" ${attrs}>Skip</button></div>` : ""}</div>
+    <div class="num ${e.type === "paid" ? "amt" : ""}">${e.amount ? (e.type === "paid" ? "+" : "~") + usd(e.amount) : e.type === "earn" && e.eps != null ? "EPS est. " + (+e.eps).toFixed(2) : ""}</div></div>`; }).join("");
 }
 function sparkline() {
   const S = [...state.snapshots].sort((a, b) => a.date.localeCompare(b.date)).slice(-120);
@@ -370,7 +374,7 @@ function viewDashboard() {
   if (!state.payments.length && !state.holdings.length) return emptyState();
   const s = stats(), data = series(s.P), max = Math.max(...data.map(d => d.v), 1), g = +settings().goal || 0;
   const yoy = s.prevYtd > 0 ? (s.ytd - s.prevYtd) / s.prevYtd : null;
-  const next = upcoming(60).find(e => e.type === "proj"), up = upcoming(5);
+  const due = dueList().slice(-4), next = upcoming(60).find(e => e.type === "proj"), up = [...due, ...upcoming(Math.max(2, 5 - due.length))];
   const byT = {}; s.ttmList.forEach(p => { (byT[p.ticker] ??= { v: 0, n: 0 }); byT[p.ticker].v += p.amount; byT[p.ticker].n++; });
   const top = Object.entries(byT).sort((a, b) => b[1].v - a[1].v).slice(0, 6), topMax = top[0]?.[1].v || 1;
   const recent = [...s.P].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6);
@@ -398,7 +402,7 @@ function viewDashboard() {
       </div>
     </div>
     <div class="card panel">
-      <div class="panel-head"><h2>Upcoming</h2><button class="btn sm ghost" data-tab="calendar">Calendar</button></div>
+      <div class="panel-head"><h2>${due.length ? "To confirm & upcoming" : "Upcoming"}</h2><button class="btn sm ghost" data-tab="calendar">Calendar</button></div>
       ${up.length ? `<div class="agenda">${agendaRows(up)}</div>` : `<p class="muted">Nothing scheduled. Set a next pay date on your holdings to project upcoming dividends.</p>`}
     </div>
   </section>
@@ -445,7 +449,7 @@ function viewPortfolio() {
   ${T.length ? `<div class="section-title">Transactions${s.realized ? `<span class="tag">Realized ${sgn(s.realized)}</span>` : ""}</div>
   <div class="card"><div class="table-wrap"><table><thead><tr><th>Date</th><th>Ticker</th><th>Type</th><th class="r">Shares</th><th class="r">Price</th><th class="r">Total</th><th></th></tr></thead>
     <tbody>${T.map(t => `<tr><td class="num muted" style="white-space:nowrap">${fmtDate(t.date)}</td><td><div class="cell-tk">${badge(t.ticker)}<span class="tk-name">${esc(t.ticker)}</span></div></td>
-      <td><span class="tag ${t.type === "sell" ? "down" : "up"}">${t.type === "sell" ? "Sell" : "Buy"}</span></td><td class="r num">${num(t.shares)}</td><td class="r num">${usd(t.price)}</td><td class="r num">${usd(t.shares * t.price)}</td>
+      <td><span class="tag ${t.type === "sell" ? "down" : "up"}">${t.type === "sell" ? "Sell" : "Buy"}</span>${t.drip ? ' <span class="tag">DRIP</span>' : t.opening ? ' <span class="tag">Opening</span>' : ""}</td><td class="r num">${num(t.shares)}</td><td class="r num">${usd(t.price)}</td><td class="r num">${usd(t.shares * t.price)}</td>
       <td class="r"><span class="row-actions"><button data-act="edit-txn" data-id="${esc(t.id)}" aria-label="Edit transaction">${ICON.edit}</button></span></td></tr>`).join("")}</tbody></table></div></div>` : ""}`;
 }
 
@@ -474,7 +478,7 @@ function viewDividends() {
       <th class="sortable hide-sm" data-sort="account">Account${arrow("account")}</th><th class="hide-sm">Notes</th><th class="r hide-sm">Shares</th><th class="sortable r" data-sort="amount">Amount${arrow("amount")}</th><th></th></tr></thead>
     <tbody>${rows.map(p => `<tr>
       <td class="num muted" style="white-space:nowrap">${fmtDate(p.date)}</td>
-      <td><div class="cell-tk">${badge(p.ticker)}<span class="tk-name">${esc(p.ticker)}</span></div></td>
+      <td><div class="cell-tk">${badge(p.ticker)}<span class="tk-name">${esc(p.ticker)}</span>${p.drip ? '<span class="tag">DRIP</span>' : ""}</div></td>
       <td class="hide-sm">${p.account ? `<span class="tag">${esc(p.account)}</span>` : ""}</td>
       <td class="muted hide-sm">${esc(p.notes || "")}</td>
       <td class="r hide-sm">${p.shares > 0 ? `<div class="num">${(+p.shares).toLocaleString("en-US", { maximumFractionDigits: 4 })}</div><div class="tk-sub num">${usd(p.amount / p.shares, 4)} / share</div>` : '<span class="muted">—</span>'}</td>
@@ -490,7 +494,7 @@ function viewCalendar() {
   const t0 = today(); state.calMonth ||= t0.slice(0, 7);
   const [y, m] = state.calMonth.split("-").map(Number), first = new Date(y, m - 1, 1), E = events(), by = {};
   E.forEach(e => (by[e.date] ??= []).push(e));
-  const order = { paid: 0, proj: 1, ex: 2, earn: 3 };
+  const order = { paid: 0, due: 1, proj: 1, ex: 2, earn: 3 };
   const start = new Date(y, m - 1, 1 - first.getDay()), weeks = Math.ceil((first.getDay() + new Date(y, m, 0).getDate()) / 7), cells = [];
   for (let i = 0; i < weeks * 7; i++) {
     const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i), k = iso(d), ev = (by[k] || []).sort((a, b) => order[a.type] - order[b.type]);
@@ -498,8 +502,8 @@ function viewCalendar() {
       <span class="n num">${d.getDate()}</span>${ev.slice(0, 3).map(e => `<span class="ev ${e.type}">${esc(e.ticker)}</span>`).join("")}${ev.length > 3 ? `<span class="more">+${ev.length - 3} more</span>` : ""}</button>`);
   }
   const mk = state.calMonth, inMonth = E.filter(e => e.date.startsWith(mk));
-  const got = sum(inMonth.filter(e => e.type === "paid"), e => e.amount), exp = sum(inMonth.filter(e => e.type === "proj"), e => e.amount);
-  const sel = state.calDay && by[state.calDay] ? by[state.calDay] : null, up = upcoming(8, 90);
+  const got = sum(inMonth.filter(e => e.type === "paid"), e => e.amount), exp = sum(inMonth.filter(e => e.type === "proj" || e.type === "due"), e => e.amount);
+  const sel = state.calDay && by[state.calDay] ? by[state.calDay] : null, up = [...dueList(), ...upcoming(8, 90)];
   return `
   <div class="cal-head"><h2>${first.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</h2>
     <span class="tag">Received ${usd(got)}</span>${exp ? `<span class="tag">Expected ~${usd(exp)}</span>` : ""}
@@ -507,7 +511,7 @@ function viewCalendar() {
     <button class="btn sm" data-act="ics" title="Download upcoming events as an .ics calendar file">Export .ics</button></div>
   <section class="grid2">
     <div><div class="cal">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => `<div class="dow">${d}</div>`).join("")}${cells.join("")}</div>
-      <div class="legend" style="margin-top:12px"><span class="ev paid">Paid</span><span class="ev proj">Expected dividend</span><span class="ev ex">Ex-dividend</span><span class="ev earn">Earnings</span>
+      <div class="legend" style="margin-top:12px"><span class="ev paid">Paid</span><span class="ev due">Due, not logged</span><span class="ev proj">Expected dividend</span><span class="ev ex">Ex-dividend</span><span class="ev earn">Earnings</span>
       ${settings().finnhubKey ? "" : `<span>Earnings dates need a market-data key (Settings).</span>`}</div></div>
     <div class="card panel"><div class="panel-head"><h2>${sel ? fmtDate(state.calDay) : "Upcoming"}</h2>${sel ? `<button class="btn sm ghost" data-day="">Show upcoming</button>` : `<span class="hint">90 days</span>`}</div>
       ${sel ? `<div class="agenda">${agendaRows(sel)}</div>` : up.length ? `<div class="agenda">${agendaRows(up)}</div>` : `<p class="muted">Nothing scheduled. Open a holding and set its next pay date and ex-dividend date; the calendar repeats them at the holding's frequency.</p>`}
@@ -588,7 +592,7 @@ function openForm(cfg) {
   $("#fExtra").innerHTML = cfg.extra || ""; $("#fErr").textContent = "";
   $("#fSave").textContent = cfg.saveLabel || "Save";
   const del = $("#fDel"); del.hidden = !cfg.onDelete; del.textContent = cfg.deleteLabel || "Delete"; del.dataset.armed = "";
-  $("#dlg").showModal(); $("#fFields").querySelector("input:not([disabled]),select")?.focus(); cfg.onOpen?.();
+  if (!$("#dlg").open) $("#dlg").showModal(); $("#fFields").querySelector("input:not([disabled]),select")?.focus(); cfg.onOpen?.();
 }
 const fail = e => { console.error(e); $("#fErr").textContent = e.user ? e.message : e?.code === "permission-denied" ? "Firestore rules blocked this change." : "Couldn't save. Please try again."; };
 $("#dlgForm").addEventListener("submit", async e => {
@@ -607,16 +611,40 @@ const up = s => s.toUpperCase().replace(/\s+/g, "");
 const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s);
 const acctDefault = () => (state.acct === "all" ? "" : state.acct);
 
-function openPay(id) {
+/* Make sure a holding exists and, if its shares were typed in by hand, turn them into an opening lot before adding transactions */
+async function ensureLot(ticker, account, date) {
+  const ex = state.holdings.find(x => x.ticker === ticker && (x.account || "") === account);
+  if (ex && !state.txns.some(x => x.ticker === ticker && (x.account || "") === account) && ex.shares > 0)
+    await store.add("transactions", { ticker, account, type: "buy", shares: +ex.shares, price: +ex.cost || 0, date: addDays(date, -1), opening: true });
+  if (!ex) await store.add("holdings", { ticker, account, name: "", shares: 0, cost: 0, dps: 0, freq: 4 });
+  return ex;
+}
+/* Keep the buy transaction of a reinvested dividend in step with its payment */
+async function syncDrip(pid, d) {
+  if (!pid) return;
+  const linked = state.txns.filter(t => t.payId === pid);
+  if (!d.drip) { await Promise.all(linked.map(t => store.remove("transactions", t.id))); return; }
+  const lot = { ticker: d.ticker, account: d.account, type: "buy", shares: +(d.amount / d.dripPrice).toFixed(6), price: d.dripPrice, date: d.date, drip: true, payId: pid };
+  await ensureLot(d.ticker, d.account, d.date);
+  if (linked.length) { await store.update("transactions", linked[0].id, lot); await Promise.all(linked.slice(1).map(t => store.remove("transactions", t.id))); }
+  else await store.add("transactions", lot);
+}
+function openPay(id, pre) {
   const p = state.payments.find(x => x.id === id);
-  openForm({ title: p ? "Edit dividend" : "Add dividend", fields: [
-    { id: "ticker", label: "Ticker", value: p?.ticker, ph: "SCHD", list: "tickers", max: 12 },
-    { id: "amount", label: "Amount received ($)", type: "number", value: p?.amount, ph: "0.00" },
-    { id: "shares", label: "Number of shares", opt: 1, type: "number", value: p?.shares || "", ph: "0", hint: "Shares that earned this payment" },
-    { id: "date", label: "Pay date", type: "date", value: p?.date || today() },
-    { id: "account", label: "Portfolio", opt: 1, full: 1, value: p?.account ?? acctDefault(), ph: "Brokerage, Roth IRA…", list: "accounts", max: 40 },
-    { id: "notes", label: "Notes", opt: 1, full: 1, value: p?.notes, ph: "Special dividend, reinvested…", max: 120 } ],
-    onOpen: () => { if (p) return; const fill = () => {   // suggest the shares currently held
+  openForm({ title: p ? "Edit dividend" : pre ? `Confirm ${pre.ticker} dividend` : "Add dividend", fields: [
+    { id: "ticker", label: "Ticker", value: p?.ticker ?? pre?.ticker, ph: "SCHD", list: "tickers", max: 12 },
+    { id: "amount", label: "Amount received ($)", type: "number", value: p?.amount ?? pre?.amount, ph: "0.00", hint: pre ? "Estimate. Change it to what you received" : "" },
+    { id: "shares", label: "Number of shares", opt: 1, type: "number", value: (p?.shares ?? pre?.shares) || "", ph: "0", hint: "Shares that earned this payment" },
+    { id: "date", label: "Pay date", type: "date", value: p?.date || pre?.date || today() },
+    { id: "account", label: "Portfolio", opt: 1, full: 1, value: p?.account ?? pre?.account ?? acctDefault(), ph: "Brokerage, Roth IRA…", list: "accounts", max: 40 },
+    { id: "drip", label: "Reinvested (DRIP)", type: "select", value: p?.drip ? "yes" : "no", opts: [["no", "No, paid as cash"], ["yes", "Yes, bought more shares"]] },
+    { id: "dripPrice", label: "Reinvest price / share ($)", opt: 1, type: "number", value: p?.dripPrice || "", ph: "0.00", hint: "Adds a buy transaction for the new shares" },
+    { id: "notes", label: "Notes", opt: 1, full: 1, value: p?.notes, ph: "Special dividend…", max: 120 } ],
+    onOpen: () => {
+      const price = () => { const el = $("#f_dripPrice"), q = state.quotes[up($("#f_ticker").value)]; if ($("#f_drip").value === "yes" && !el.value && q?.c) el.value = q.c; };
+      $("#f_drip").addEventListener("change", price);
+      if (p || pre) return;
+      const fill = () => {   // suggest the shares currently held
         const t = up($("#f_ticker").value), a = $("#f_account").value.trim(), el = $("#f_shares"); if (!t || (el.value && !el.dataset.auto)) return;
         const hs = positions(true).filter(h => h.ticker === t && h.shares > 0), h = hs.find(x => (x.account || "") === a) || (hs.length === 1 ? hs[0] : null);
         el.value = h ? +h.shares.toFixed(6) : ""; el.dataset.auto = "1"; };
@@ -624,10 +652,13 @@ function openPay(id) {
       $("#f_shares").addEventListener("input", e => (e.target.dataset.auto = "")); },
     onSave: async v => {
       v.ticker = up(v.ticker); if (!v.ticker) bad("Enter a ticker."); if (!(v.amount > 0)) bad("Enter an amount greater than zero."); if (!isDate(v.date)) bad("Pick a pay date.");
-      v.amount = Math.round(v.amount * 100) / 100; v.shares = v.shares > 0 ? v.shares : 0;
-      await (p ? store.update("dividends", id, v) : store.add("dividends", v)); return p ? "Dividend updated" : `Added ${usd(v.amount)} from ${v.ticker}`;
+      const drip = v.drip === "yes"; if (drip && !(v.dripPrice > 0)) bad("Enter the price the dividend was reinvested at.");
+      const data = { ticker: v.ticker, amount: Math.round(v.amount * 100) / 100, shares: v.shares > 0 ? v.shares : 0, date: v.date, account: v.account, notes: v.notes, drip, dripPrice: drip ? v.dripPrice : 0 };
+      let pid = id; if (p) await store.update("dividends", id, data); else pid = await store.add("dividends", data);
+      if (drip || p?.drip) await syncDrip(pid, data);
+      return p ? "Dividend updated" : `Added ${usd(data.amount)} from ${data.ticker}${drip ? `, reinvested into ${+(data.amount / data.dripPrice).toFixed(4)} shares` : ""}`;
     },
-    onDelete: p && (() => store.remove("dividends", id)) });
+    onDelete: p && (async () => { await Promise.all(state.txns.filter(t => t.payId === id).map(t => store.remove("transactions", t.id))); await store.remove("dividends", id); }) });
 }
 function openHold(id) {
   const h = state.holdings.find(x => x.id === id), d = h && positions(true).find(x => x.id === id), key = settings().finnhubKey;
@@ -675,9 +706,7 @@ function openTxn(id, holdId) {
       const ticker = up(v.ticker); if (!ticker) bad("Enter a ticker.");
       const ex = state.holdings.find(x => x.ticker === ticker && (x.account || "") === v.account);
       if (!ex && v.type === "sell") bad(`You don't hold ${ticker} in ${v.account || "this portfolio"}.`);
-      if (ex && !state.txns.some(x => x.ticker === ticker && (x.account || "") === v.account) && ex.shares > 0)
-        await store.add("transactions", { ticker, account: v.account, type: "buy", shares: +ex.shares, price: +ex.cost || 0, date: addDays(v.date, -1), opening: true });
-      if (!ex) await store.add("holdings", { ticker, account: v.account, name: "", shares: 0, cost: 0, dps: 0, freq: 4 });
+      await ensureLot(ticker, v.account, v.date);
       await store.add("transactions", { ticker, account: v.account, type: v.type, shares: v.shares, price: v.price, date: v.date });
       if (!ex) refreshSoon(); return `${v.type === "sell" ? "Sold" : "Bought"} ${v.shares} ${ticker}`;
     },
@@ -705,7 +734,9 @@ function openSettings() {
     { id: "finnhubKey", label: "Finnhub API key", opt: 1, full: 1, type: "password", value: s.finnhubKey, max: 80, hint: "Free key from finnhub.io. Turns on live prices, earnings dates, news and IPOs. Stored in your private settings, not in the site's code." },
     { id: "massiveKey", label: "Massive API key", opt: 1, full: 1, type: "password", value: s.massiveKey, max: 80, hint: "Free key from massive.com. Fills in each holding's dividend per share, frequency, next pay date and ex-dividend date." },
     { id: "goal", label: "Annual dividend income goal ($)", opt: 1, full: 1, type: "number", value: s.goal || "" } ],
-    extra: who ? `<p class="muted" style="margin:18px 0 0;font-size:13px">Signed in as <b>${who}</b> · <button type="button" class="btn sm ghost" data-act="signout">Sign out</button></p>` : "",
+    extra: `<div class="backup"><div><b>Backup</b><div class="muted">${(() => { try { const d = localStorage.getItem("dt_lastBackup"); return d ? "Last backup from this device: " + fmtDate(d) : "No backup made from this device yet"; } catch { return ""; } })()}. API keys are not included.</div></div>
+        <button type="button" class="btn sm" data-act="backup">Download backup</button><button type="button" class="btn sm" data-act="restore">Restore…</button></div>` +
+      (who ? `<p class="muted" style="margin:14px 0 0;font-size:13px">Signed in as <b>${who}</b> · <button type="button" class="btn sm ghost" data-act="signout">Sign out</button></p>` : ""),
     onSave: async v => { const changed = v.finnhubKey !== (s.finnhubKey || ""); const mvChanged = v.massiveKey !== (s.massiveKey || "");
       await store.set("settings", "main", { finnhubKey: v.finnhubKey, massiveKey: v.massiveKey, goal: v.goal || 0 });
       if (mvChanged && v.massiveKey) { mvOld = false; setTimeout(() => syncDividends(true), 400); }
@@ -764,6 +795,50 @@ async function importCsv(file) {
     await Promise.all(jobs); toast(`Imported ${jobs.length} payment${jobs.length === 1 ? "" : "s"}${skip ? `, skipped ${skip}` : ""}`);
   } catch (e) { console.error(e); toast("Couldn't import that file"); }
 }
+/* ───────── Backup & restore ───────── */
+const SCHEMA = {
+  dividends: { ticker: "s", amount: "n", shares: "n", date: "s", account: "s", notes: "s", drip: "b", dripPrice: "n" },
+  holdings: { ticker: "s", name: "s", sector: "s", account: "s", shares: "n", cost: "n", dps: "n", freq: "n", nextPay: "s", exDate: "s", price: "n" },
+  transactions: { ticker: "s", account: "s", type: "s", shares: "n", price: "n", date: "s", opening: "b", drip: "b", payId: "s" },
+  watchlist: { ticker: "s", name: "s", notes: "s", target: "n", dir: "s" },
+  snapshots: { date: "s", value: "n", basis: "n" },
+  settings: { goal: "n", skips: "o" }          // API keys are deliberately left out
+};
+function cleanDoc(c, doc) {
+  const out = {};
+  for (const [k, t] of Object.entries(SCHEMA[c])) { const v = doc?.[k]; if (v == null) continue;
+    if (t === "n") { if (isFinite(+v)) out[k] = +v; } else if (t === "s") out[k] = String(v).slice(0, 200); else if (t === "b") out[k] = !!v;
+    else if (t === "o" && typeof v === "object") out[k] = Object.fromEntries(Object.keys(v).slice(0, 2000).map(x => [String(x).slice(0, 80), 1])); }
+  return out;
+}
+const okId = id => typeof id === "string" && id.length > 0 && id.length <= 200 && !id.includes("/") && id !== "." && id !== "..";
+function exportBackup() {
+  const data = {}; for (const c in SCHEMA) data[c] = state[COLS[c]].filter(d => okId(d.id)).map(d => ({ id: d.id, ...cleanDoc(c, d) }));
+  download(`dividend-tracker-backup-${today()}.json`, JSON.stringify({ app: "dividend-tracker", version: 1, exportedAt: new Date().toISOString(), data }, null, 2), "application/json");
+  try { localStorage.setItem("dt_lastBackup", today()); } catch {}
+  toast("Backup downloaded");
+}
+async function readBackup(file) {
+  let b; try { b = JSON.parse(await file.text()); } catch { return toast("That file isn't a valid backup"); }
+  if (b?.app !== "dividend-tracker" || typeof b.data !== "object") return toast("That file isn't a Dividend Tracker backup");
+  const data = {}; for (const c in SCHEMA) data[c] = (Array.isArray(b.data[c]) ? b.data[c] : []).filter(d => d && okId(d.id)).slice(0, 20000);
+  const LABEL = { dividends: "payments", holdings: "holdings", transactions: "transactions", watchlist: "watchlist items", snapshots: "value snapshots" };
+  let armed = false;
+  openForm({ title: "Restore backup", saveLabel: "Restore", fields: [
+    { id: "mode", label: "How to restore", full: 1, type: "select", value: "merge", opts: [["merge", "Merge: add and update, keep everything else"], ["replace", "Replace: delete anything that isn't in the backup"]] } ],
+    extra: `<p class="muted" style="font-size:13.5px;margin:14px 0 0">Backup from <b>${esc(String(b.exportedAt || "").slice(0, 10) || "unknown date")}</b> with ${Object.keys(LABEL).map(c => `${data[c].length} ${LABEL[c]}`).join(", ")}. API keys in Settings are kept as they are.</p>`,
+    onSave: async v => {
+      if (v.mode === "replace" && !armed) { armed = true; bad("Replace deletes everything in this account that isn't in the backup. Click Restore again to confirm."); }
+      let n = 0; const run = async jobs => { for (let i = 0; i < jobs.length; i += 25) await Promise.all(jobs.slice(i, i + 25).map(j => j())); };
+      for (const c in SCHEMA) {
+        const keep = new Set(data[c].map(d => d.id));
+        if (v.mode === "replace" && c !== "settings") await run(state[COLS[c]].filter(d => !keep.has(d.id)).map(d => () => store.remove(c, d.id)));
+        await run(data[c].map(d => () => { n++; return store.set(c, d.id, cleanDoc(c, d)); }));
+      }
+      refreshSoon(); return `Restored ${n} items`;
+    } });
+}
+
 function exportIcs() {
   const E = upcoming(500, 400); if (!E.length) return toast("No upcoming events to export");
   const stamp = new Date().toISOString().replace(/[-:]|\.\d+/g, ""), d8 = s => s.replace(/-/g, "");
@@ -778,6 +853,9 @@ const ACTS = {
   signin: signIn, signout: () => { $("#dlg").close(); fb.au.signOut(fb.auth); }, settings: openSettings, sample: (t) => { t.disabled = true; loadSample(); },
   "add-pay": () => openPay(), "edit-pay": t => openPay(t.dataset.id), "add-hold": () => openHold(), "edit-hold": t => openHold(t.dataset.id),
   "add-txn": t => openTxn(null, t.dataset.id), "edit-txn": t => openTxn(t.dataset.id), "add-watch": () => openWatch(), "edit-watch": t => openWatch(t.dataset.id),
+  paid: t => openPay(null, { ticker: t.dataset.t, account: t.dataset.a, date: t.dataset.d, amount: +t.dataset.amt, shares: +t.dataset.sh || "" }),
+  skip: t => store.set("settings", "main", { skips: { ...(settings().skips || {}), [`${t.dataset.t}|${t.dataset.a}|${t.dataset.d}`]: 1 } }).then(() => toast("Skipped")).catch(() => toast("Couldn't save that")),
+  backup: exportBackup, restore: () => $("#bakFile").click(),
   csv: exportCsv, import: () => $("#csvFile").click(), ics: exportIcs, dismiss: () => { state.banner = ""; state.apiErr = ""; render(); }
 };
 function go(tab) { state.tab = tab; render(); if (tab === "market") loadMarketTab(); window.scrollTo({ top: 0 }); }
@@ -800,6 +878,7 @@ document.addEventListener("change", e => {
   if (e.target.id === "year") { state.year = e.target.value; render(); }
   else if (e.target.id === "acct") { state.acct = e.target.value; render(); }
   else if (e.target.id === "csvFile") { const f = e.target.files[0]; e.target.value = ""; if (f && store) importCsv(f); }
+  else if (e.target.id === "bakFile") { const f = e.target.files[0]; e.target.value = ""; if (f && store) readBackup(f); }
 });
 
 try { const th = localStorage.getItem("dt_theme"); if (th) document.documentElement.dataset.theme = th; } catch {}
