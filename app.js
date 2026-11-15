@@ -10,6 +10,8 @@ const firebaseConfig = {
   measurementId: "G-CWWFDWDE22"
 };
 /* Firestore collection → state key (all under users/{uid}/) */
+/* App Check: paste the reCAPTCHA Enterprise site key here to turn it on (the key is public by design) */
+const APP_CHECK_KEY = "";
 const COLS = { dividends: "payments", holdings: "holdings", transactions: "txns", watchlist: "watch", settings: "settingsDocs", snapshots: "snapshots" };
 
 /* ───────── State & helpers ───────── */
@@ -74,6 +76,8 @@ async function initCloud() {
     const base = `https://www.gstatic.com/firebasejs/${FB_VER}/`;
     const [{ initializeApp }, fs, au] = await Promise.all([import(base + "firebase-app.js"), import(base + "firebase-firestore.js"), import(base + "firebase-auth.js")]);
     const app = initializeApp(firebaseConfig);
+    if (APP_CHECK_KEY) try { const ac = await import(base + "firebase-app-check.js"); ac.initializeAppCheck(app, { provider: new ac.ReCaptchaEnterpriseProvider(APP_CHECK_KEY), isTokenAutoRefreshEnabled: true }); }
+      catch (e) { console.warn("App Check failed to start:", e); }
     fb = { fs, au, db: fs.getFirestore(app), auth: au.getAuth(app), user: null };
     import(base + "firebase-analytics.js").then(m => m.isSupported().then(ok => ok && m.getAnalytics(app))).catch(() => {});
     au.onAuthStateChanged(fb.auth, user => (user ? startSync(user) : signedOut()));

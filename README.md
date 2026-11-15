@@ -31,17 +31,6 @@ Sign-in is with Google. Each user's data lives under `users/{uid}/` (dividends, 
 
 1. Firebase console → Authentication → Sign-in method: enable Google.
 2. Authentication → Settings → Authorized domains: add `mubasheermk.github.io`.
-3. Firestore Database → Rules: publish
-
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /users/{uid}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
-    }
-  }
-}
-```
+3. Firestore Database → Rules: publish the contents of [`firestore.rules`](firestore.rules). They limit each user to their own data and check every field that is written.
 
 The app is plain HTML, CSS and JavaScript (`index.html`, `styles.css`, `app.js`); there is no build step.
