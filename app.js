@@ -14,7 +14,7 @@ const COLS = { dividends: "payments", holdings: "holdings", transactions: "txns"
 
 /* ───────── State & helpers ───────── */
 const state = { payments: [], holdings: [], txns: [], watch: [], settingsDocs: [], snapshots: [],
-  mode: "connecting", tab: "dashboard", acct: "all", range: "12m", alloc: "holding", q: "", year: "all", sortK: "date", sortD: -1,
+  mode: "connecting", tab: "dashboard", acct: "all", range: "12m", alloc: "holding", q: "", year: "all", sortK: "date", sortD: -1, taxYear: "",
   banner: "", divMsg: "", calMonth: "", calDay: "", quotes: {}, earnings: [], market: { tab: "news", news: null, ipos: null, busy: false }, apiErr: "", busy: false,
   ins: { metrics: {}, busy: false }, proj: (() => { const d = { contrib: 500, g: 5, a: 4 }; try { return { ...d, ...JSON.parse(localStorage.getItem("dt_proj")) }; } catch { return d; } })() };
 let store = null;
@@ -429,7 +429,7 @@ function viewPortfolio() {
   const num = (n, d = 4) => (+n).toLocaleString("en-US", { maximumFractionDigits: d });
   return `
   <div class="toolbar"><div class="muted">${settings().finnhubKey ? (state.busy ? "Refreshing prices…" : "Live prices from Finnhub.") : "Prices are the ones you enter on each holding. Add a market-data key in Settings for live quotes."}${state.divMsg ? " " + esc(state.divMsg) : ""}</div><span class="spacer"></span>
-    <button class="btn" data-act="add-txn">Add transaction</button><button class="btn primary" data-act="add-hold">Add holding</button></div>
+    <button class="btn" data-act="broker">Import from broker</button><button class="btn" data-act="add-txn">Add transaction</button><button class="btn primary" data-act="add-hold">Add holding</button></div>
   <div class="card"><div class="table-wrap">${H.length ? `<table>
     <thead><tr><th>Holding</th><th class="r">Shares</th><th class="r hide-sm">Avg cost</th><th class="r">Price</th><th class="r">Value</th><th class="r hide-sm">Total gain</th><th class="r hide-sm">Yield / on cost</th><th class="r">Annual income</th><th></th></tr></thead>
     <tbody>${H.map(h => `<tr${h.shares > 0 ? "" : ' style="opacity:.55"'}>
@@ -467,12 +467,22 @@ function viewDividends() {
     <div class="table-wrap"><table class="heat"><thead><tr><th>Year</th>${MONTHS.map(m => `<th>${m}</th>`).join("")}<th>Total</th><th class="hide-sm">Growth</th></tr></thead><tbody>
     ${years.map(y => { const t = sum(M[y]), prev = M[y - 1] ? sum(M[y - 1]) : 0; return `<tr><td><b>${y}</b></td>${M[y].map(v => `<td class="c num" style="background:color-mix(in srgb, var(--violet) ${(v / mx * 60).toFixed(0)}%, transparent)">${v ? Math.round(v).toLocaleString("en-US") : '<span class="muted">·</span>'}</td>`).join("")}
       <td class="num"><b>${usd(t, 0)}</b></td><td class="num hide-sm ${prev ? cls(t - prev) : "muted"}">${prev ? spct((t - prev) / prev * 100) : "—"}</td></tr>`; }).join("")}</tbody></table></div></div>` : "";
-  return `${heat}
+  const ty = years.includes(state.taxYear) ? state.taxYear : years[0], TP = P.filter(p => p.date.startsWith(ty || "x")), byA = {};
+  TP.forEach(p => { const a = (byA[p.account || ""] ??= { n: 0, g: 0, t: 0 }); a.n++; a.g += p.amount; a.t += p.tax || 0; });
+  const tg = sum(TP, p => p.amount), tt = sum(TP, p => p.tax || 0);
+  const tax = years.length ? `<div class="card" style="margin-bottom:22px"><div class="panel-head" style="padding:20px 22px 0;margin-bottom:8px"><h2>Tax summary</h2>
+      <select class="input" id="taxYear" aria-label="Tax year" style="padding:6px 10px;font-size:13px">${years.map(y => `<option ${y === ty ? "selected" : ""}>${y}</option>`).join("")}</select>
+      <button class="btn sm" data-act="taxcsv">Download report</button></div>
+    <div class="table-wrap"><table><thead><tr><th>Portfolio</th><th class="r hide-sm">Payments</th><th class="r">Dividends</th><th class="r">Tax withheld</th><th class="r">After tax</th></tr></thead><tbody>
+    ${Object.entries(byA).sort((a, b) => b[1].g - a[1].g).map(([a, v]) => `<tr><td>${a ? esc(a) : '<span class="muted">No portfolio</span>'}</td><td class="r num hide-sm">${v.n}</td><td class="r num">${usd(v.g)}</td><td class="r num ${v.t ? "down" : "muted"}">${v.t ? "−" + usd(v.t) : "—"}</td><td class="r num amt">${usd(v.g - v.t)}</td></tr>`).join("")}</tbody>
+    <tfoot><tr><td>${ty} total</td><td class="r num hide-sm">${TP.length}</td><td class="r num">${usd(tg)}</td><td class="r num">${tt ? "−" + usd(tt) : "—"}</td><td class="r num">${usd(tg - tt)}</td></tr></tfoot></table></div>
+    <p class="muted" style="padding:0 22px 18px;margin:10px 0 0;font-size:12.5px">Totals of what you logged, by portfolio, for your own records. Your broker's 1099-DIV is the official figure, and it also splits qualified from ordinary dividends, which this doesn't.</p></div>` : "";
+  return `${heat}${tax}
   <div class="toolbar">
     <input class="input search" id="q" type="search" placeholder="Search ticker, account, notes" value="${esc(state.q)}" aria-label="Search payments">
     <select class="input" id="year" aria-label="Filter by year"><option value="all">All years</option>${years.map(y => `<option ${state.year === y ? "selected" : ""}>${y}</option>`).join("")}</select>
     <span class="spacer"></span>
-    <button class="btn" data-act="import">Import CSV</button><button class="btn" data-act="csv" ${P.length ? "" : "disabled"}>Export CSV</button>
+    <button class="btn" data-act="broker">Import from broker</button><button class="btn" data-act="import">Import CSV</button><button class="btn" data-act="csv" ${P.length ? "" : "disabled"}>Export CSV</button>
   </div>
   <div class="card"><div class="table-wrap">${rows.length ? `<table>
     <thead><tr><th class="sortable" data-sort="date">Date${arrow("date")}</th><th class="sortable" data-sort="ticker">Ticker${arrow("ticker")}</th>
@@ -483,7 +493,7 @@ function viewDividends() {
       <td class="hide-sm">${p.account ? `<span class="tag">${esc(p.account)}</span>` : ""}</td>
       <td class="muted hide-sm">${esc(p.notes || "")}</td>
       <td class="r hide-sm">${p.shares > 0 ? `<div class="num">${(+p.shares).toLocaleString("en-US", { maximumFractionDigits: 4 })}</div><div class="tk-sub num">${usd(p.amount / p.shares, 4)} / share</div>` : '<span class="muted">—</span>'}</td>
-      <td class="r num amt">+${usd(p.amount)}</td>
+      <td class="r"><div class="num amt">+${usd(p.amount)}</div>${p.tax > 0 ? `<div class="tk-sub num">−${usd(p.tax)} tax</div>` : ""}</td>
       <td class="r"><span class="row-actions"><button data-act="edit-pay" data-id="${esc(p.id)}" aria-label="Edit ${esc(p.ticker)} payment">${ICON.edit}</button></span></td></tr>`).join("")}</tbody>
     <tfoot><tr><td colspan="2">${rows.length} payment${rows.length > 1 ? "s" : ""}</td><td class="hide-sm"></td><td class="hide-sm"></td><td class="hide-sm"></td><td class="r num">${usd(sum(rows, p => p.amount))}</td><td></td></tr></tfoot>
   </table>` : `<div class="empty"><div class="big">${P.length ? "No matches" : "No payments yet"}</div>
@@ -703,10 +713,11 @@ function openPay(id, pre) {
   const p = state.payments.find(x => x.id === id);
   openForm({ title: p ? "Edit dividend" : pre ? `Confirm ${pre.ticker} dividend` : "Add dividend", fields: [
     { id: "ticker", label: "Ticker", value: p?.ticker ?? pre?.ticker, ph: "SCHD", list: "tickers", max: 12 },
-    { id: "amount", label: "Amount received ($)", type: "number", value: p?.amount ?? pre?.amount, ph: "0.00", hint: pre ? "Estimate. Change it to what you received" : "" },
+    { id: "amount", label: "Dividend amount ($)", type: "number", value: p?.amount ?? pre?.amount, ph: "0.00", hint: pre ? "Estimate. Change it to the actual amount" : "Before any tax withheld" },
     { id: "shares", label: "Number of shares", opt: 1, type: "number", value: (p?.shares ?? pre?.shares) || "", ph: "0", hint: "Shares that earned this payment" },
     { id: "date", label: "Pay date", type: "date", value: p?.date || pre?.date || today() },
-    { id: "account", label: "Portfolio", opt: 1, full: 1, value: p?.account ?? pre?.account ?? acctDefault(), ph: "Brokerage, Roth IRA…", list: "accounts", max: 40 },
+    { id: "tax", label: "Tax withheld ($)", opt: 1, type: "number", value: p?.tax || "", ph: "0.00", hint: "Taken out before you were paid" },
+    { id: "account", label: "Portfolio", opt: 1, value: p?.account ?? pre?.account ?? acctDefault(), ph: "Brokerage, Roth IRA…", list: "accounts", max: 40 },
     { id: "drip", label: "Reinvested (DRIP)", type: "select", value: p?.drip ? "yes" : "no", opts: [["no", "No, paid as cash"], ["yes", "Yes, bought more shares"]] },
     { id: "dripPrice", label: "Reinvest price / share ($)", opt: 1, type: "number", value: p?.dripPrice || "", ph: "0.00", hint: "Adds a buy transaction for the new shares" },
     { id: "notes", label: "Notes", opt: 1, full: 1, value: p?.notes, ph: "Special dividend…", max: 120 } ],
@@ -723,7 +734,8 @@ function openPay(id, pre) {
     onSave: async v => {
       v.ticker = up(v.ticker); if (!v.ticker) bad("Enter a ticker."); if (!(v.amount > 0)) bad("Enter an amount greater than zero."); if (!isDate(v.date)) bad("Pick a pay date.");
       const drip = v.drip === "yes"; if (drip && !(v.dripPrice > 0)) bad("Enter the price the dividend was reinvested at.");
-      const data = { ticker: v.ticker, amount: Math.round(v.amount * 100) / 100, shares: v.shares > 0 ? v.shares : 0, date: v.date, account: v.account, notes: v.notes, drip, dripPrice: drip ? v.dripPrice : 0 };
+      if (v.tax > v.amount) bad("Tax withheld can't be more than the dividend.");
+      const data = { ticker: v.ticker, amount: Math.round(v.amount * 100) / 100, shares: v.shares > 0 ? v.shares : 0, date: v.date, account: v.account, notes: v.notes, drip, dripPrice: drip ? v.dripPrice : 0, tax: v.tax > 0 ? Math.round(v.tax * 100) / 100 : 0 };
       let pid = id; if (p) await store.update("dividends", id, data); else pid = await store.add("dividends", data);
       if (drip || p?.drip) await syncDrip(pid, data);
       return p ? "Dividend updated" : `Added ${usd(data.amount)} from ${data.ticker}${drip ? `, reinvested into ${+(data.amount / data.dripPrice).toFixed(4)} shares` : ""}`;
@@ -837,7 +849,7 @@ function download(name, text, type) {
 }
 function exportCsv() {
   const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const rows = [["Date","Ticker","Amount","Shares","Account","Notes"], ...state.payments.filter(inAcct).sort((a, b) => a.date.localeCompare(b.date)).map(p => [p.date, p.ticker, p.amount, p.shares || "", p.account, p.notes])];
+  const rows = [["Date","Ticker","Amount","Tax withheld","Shares","Account","Notes"], ...state.payments.filter(inAcct).sort((a, b) => a.date.localeCompare(b.date)).map(p => [p.date, p.ticker, p.amount, p.tax || "", p.shares || "", p.account, p.notes])];
   download(`dividends-${today()}.csv`, rows.map(r => r.map(q).join(",")).join("\n"), "text/csv");
 }
 function parseCsv(text) {
@@ -853,21 +865,118 @@ async function importCsv(file) {
   try {
     const rows = parseCsv(await file.text()); if (rows.length < 2) return toast("That file has no rows to import");
     const head = rows[0].map(h => h.trim().toLowerCase()), ix = n => head.findIndex(h => n.some(x => h === x || h.includes(x)));
-    const cD = ix(["date"]), cT = ix(["ticker", "symbol"]), cA = ix(["amount", "total", "value"]), cAc = ix(["account", "portfolio"]), cN = ix(["note", "description"]), cS = ix(["shares", "quantity"]);
+    const cD = ix(["date"]), cT = ix(["ticker", "symbol"]), cA = head.findIndex(h => h === "amount") > -1 ? head.findIndex(h => h === "amount") : ix(["amount", "total", "value"]), cAc = ix(["account", "portfolio"]), cN = ix(["note", "description"]), cS = ix(["shares", "quantity"]), cX = ix(["tax"]);
     if (cD < 0 || cT < 0 || cA < 0) return toast("CSV needs Date, Ticker and Amount columns");
     const toIso = s => { s = s.trim(); if (isDate(s.slice(0, 10))) return s.slice(0, 10); const m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/); return m ? `${m[3].length === 2 ? "20" + m[3] : m[3]}-${pad(m[1])}-${pad(m[2])}` : ""; };
     const have = new Set(state.payments.map(p => [p.date, p.ticker, p.amount, p.account || ""].join("|"))), jobs = []; let skip = 0;
     for (const r of rows.slice(1)) {
-      const d = { date: toIso(r[cD] || ""), ticker: up(r[cT] || ""), amount: Math.round(parseFloat(String(r[cA] || "").replace(/[$,\s]/g, "")) * 100) / 100, account: cAc > -1 ? (r[cAc] || "").trim() : "", notes: cN > -1 ? (r[cN] || "").trim().slice(0, 120) : "", shares: cS > -1 ? parseFloat(String(r[cS] || "").replace(/,/g, "")) || 0 : 0 };
+      const d = { date: toIso(r[cD] || ""), ticker: up(r[cT] || ""), amount: Math.round(parseFloat(String(r[cA] || "").replace(/[$,\s]/g, "")) * 100) / 100, account: cAc > -1 ? (r[cAc] || "").trim() : "", notes: cN > -1 ? (r[cN] || "").trim().slice(0, 120) : "", shares: cS > -1 ? parseFloat(String(r[cS] || "").replace(/,/g, "")) || 0 : 0, tax: cX > -1 ? Math.abs(parseFloat(String(r[cX] || "").replace(/[$,\s]/g, ""))) || 0 : 0 };
       if (!d.date || !d.ticker || !(d.amount > 0) || have.has([d.date, d.ticker, d.amount, d.account].join("|"))) { skip++; continue; }
       jobs.push(store.add("dividends", d));
     }
     await Promise.all(jobs); toast(`Imported ${jobs.length} payment${jobs.length === 1 ? "" : "s"}${skip ? `, skipped ${skip}` : ""}`);
   } catch (e) { console.error(e); toast("Couldn't import that file"); }
 }
+/* ───────── Tax report ───────── */
+function exportTax() {
+  const P = state.payments.filter(inAcct), years = uniq(P.map(p => p.date.slice(0, 4))).reverse(), y = years.includes(state.taxYear) ? state.taxYear : years[0], by = {};
+  P.filter(p => p.date.startsWith(y)).forEach(p => { const k = (p.account || "") + "|" + p.ticker, a = (by[k] ??= { a: p.account || "", t: p.ticker, n: 0, g: 0, x: 0 }); a.n++; a.g += p.amount; a.x += p.tax || 0; });
+  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`, r2 = n => n.toFixed(2);
+  const rows = [["Year", "Portfolio", "Ticker", "Payments", "Dividends", "Tax withheld", "After tax"], ...Object.values(by).sort((a, b) => a.a.localeCompare(b.a) || a.t.localeCompare(b.t)).map(v => [y, v.a, v.t, v.n, r2(v.g), r2(v.x), r2(v.g - v.x)])];
+  download(`dividend-tax-summary-${y}.csv`, rows.map(r => r.map(q).join(",")).join("\n"), "text/csv");
+}
+
+/* ───────── Import from a broker export (positions or activity) ───────── */
+const numIn = v => { let s = String(v ?? "").trim(); if (!s) return NaN; const neg = /^\(.*\)$/.test(s) || s.startsWith("-"); const n = parseFloat(s.replace(/[^0-9.]/g, "")); return isFinite(n) ? (neg ? -n : n) : NaN; };
+const dateIn = s => { s = String(s ?? "").trim(); if (isDate(s.slice(0, 10))) return s.slice(0, 10); const m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/); return m ? `${m[3].length === 2 ? "20" + m[3] : m[3]}-${pad(m[1])}-${pad(m[2])}` : ""; };
+const symIn = s => { s = String(s ?? "").trim().toUpperCase(); return /^[A-Z][A-Z0-9.\-]{0,9}$/.test(s) ? s : ""; };
+const hashOf = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); };
+const r2 = n => Math.round(n * 100) / 100;
+function classify(action, desc) {
+  const pick = t => /reinvest/.test(t) ? "reinvest" : /\btax\b|withh/.test(t) ? "tax" : /dividend|\bcdiv\b|\bdiv\b/.test(t) ? "div" : /\bbuy\b|bought|purchase/.test(t) ? "buy" : /\bsell\b|sold/.test(t) ? "sell" : "";
+  return pick(action.toLowerCase()) || pick((action + " " + desc).toLowerCase());
+}
+function parseBroker(text) {
+  const rows = parseCsv(text.replace(/^\uFEFF/, ""));
+  const hi = rows.findIndex(r => r.filter(c => c.trim()).length >= 3 && r.some(c => /^(symbol|ticker|instrument)$/i.test(c.trim())));
+  if (hi < 0) return null;
+  const head = rows[hi].map(h => h.trim().toLowerCase());
+  const col = names => { for (const n of names) { const i = head.indexOf(n); if (i > -1) return i; } for (const n of names) { const i = head.findIndex(h => h.includes(n)); if (i > -1) return i; } return -1; };
+  const c = { sym: col(["symbol", "ticker", "instrument"]), date: col(["run date", "trade date", "activity date", "transaction date", "date"]), action: col(["action", "trans code", "transaction type", "activity type"]),
+    desc: col(["description", "security description", "name"]), qty: col(["quantity", "shares", "qty"]), price: col(["price"]), amount: col(["amount", "net amount"]), acct: col(["account name", "account"]),
+    avg: col(["average cost basis", "average cost", "avg cost", "cost/share", "unit cost"]), total: col(["cost basis total", "cost basis", "total cost"]) };
+  const kind = c.date > -1 && c.action > -1 ? "activity" : c.qty > -1 ? "positions" : null; if (!kind) return null;
+  const items = [], cell = (r, i) => (i > -1 ? (r[i] ?? "").trim() : ""); let skipped = 0;
+  for (const r of rows.slice(hi + 1)) {
+    const ticker = symIn(cell(r, c.sym)), acct = cell(r, c.acct).slice(0, 40), qty = Math.abs(numIn(cell(r, c.qty)));
+    if (kind === "positions") {
+      if (!ticker || !(qty > 0)) { skipped++; continue; }
+      const avg = Math.abs(numIn(cell(r, c.avg))), total = Math.abs(numIn(cell(r, c.total)));
+      items.push({ ticker, acct, qty, cost: avg > 0 ? avg : total > 0 ? total / qty : 0, name: cell(r, c.desc).slice(0, 60) }); continue;
+    }
+    const date = dateIn(cell(r, c.date)), type = classify(cell(r, c.action), cell(r, c.desc)), amount = numIn(cell(r, c.amount)); let price = Math.abs(numIn(cell(r, c.price)));
+    if (!date || !ticker || !type) { skipped++; continue; }
+    if (!(price > 0) && qty > 0 && isFinite(amount)) price = Math.abs(amount) / qty;
+    if (type === "reinvest") { if (qty > 0 && price > 0) items.push({ k: "buy", drip: true, date, ticker, acct, qty, price }); else if (amount > 0) items.push({ k: "div", date, ticker, acct, amount }); else skipped++; }
+    else if (type === "div") { if (amount > 0) items.push({ k: "div", date, ticker, acct, amount }); else skipped++; }
+    else if (type === "tax") { if (isFinite(amount) && amount !== 0) items.push({ k: "tax", date, ticker, acct, amount: Math.abs(amount) }); else skipped++; }
+    else if (qty > 0 && price >= 0) items.push({ k: type, date, ticker, acct, qty, price }); else skipped++;
+  }
+  return { kind, items, skipped, hasAcct: c.acct > -1 };
+}
+async function readBroker(file) {
+  let B; try { B = parseBroker(await file.text()); } catch (e) { console.error(e); }
+  if (!B) return toast("Couldn't find a Symbol column in that file");
+  if (!B.items.length) return toast("No usable rows found in that file");
+  const n = k => B.items.filter(i => i.k === k && !i.drip).length, nd = B.items.filter(i => i.drip).length, dates = B.items.map(i => i.date).filter(Boolean).sort();
+  const pl = (c, w) => `<b>${c}</b> ${w}${c === 1 ? "" : "s"}`;
+  const summary = B.kind === "positions" ? `${pl(B.items.length, "position")} found.`
+    : `${pl(n("div"), "dividend")}, ${pl(n("buy"), "buy")}, ${pl(n("sell"), "sell")}, ${pl(nd, "reinvestment")}${n("tax") ? `, ${pl(n("tax"), "tax row")}` : ""}, dated ${fmtDate(dates[0])} to ${fmtDate(dates.at(-1))}.`;
+  openForm({ title: B.kind === "positions" ? "Import positions" : "Import account activity", saveLabel: "Import", fields: [
+    { id: "account", label: "Portfolio", opt: 1, full: 1, value: B.hasAcct ? "" : acctDefault(), list: "accounts", max: 40, hint: B.hasAcct ? "Leave blank to use the account names in the file" : "Which portfolio these belong to" },
+    ...(B.kind === "activity" ? [{ id: "mode", label: "What to import", full: 1, type: "select", value: "div", opts: [["div", "Dividends only (leave my shares alone)"], ["add", "Dividends and trades, on top of the shares I typed in"], ["only", "Dividends and trades, replacing typed-in shares with this file's trades"]] }] : []) ],
+    extra: `<p class="muted" style="font-size:13.5px;margin:14px 0 0">${summary} ${B.skipped} other rows will be ignored (cash, transfers, interest, fees, options).</p>
+      <p class="muted" style="font-size:12.5px;margin:8px 0 0">${B.kind === "positions" ? "Existing holdings get their shares and average cost updated. Holdings that already have transactions are left alone." : "Importing the same file twice doesn't create duplicates. If your export covers only part of your history, \"Dividends only\" is the safe choice."}</p>`,
+    onSave: async v => { const msg = await runBrokerImport(B, v.account, v.mode || "div"); refreshSoon(); return msg; } });
+}
+async function runBrokerImport(B, acctOverride, mode) {
+  const acctOf = i => acctOverride || i.acct || "", key = (t, a) => t + "|" + a, jobs = [], seen = {};
+  const uid = (pre, s) => { const n = (seen[pre + s] = (seen[pre + s] || 0) + 1); return pre + hashOf(s + "#" + n); };
+  const hold = (t, a) => state.holdings.find(h => h.ticker === t && (h.account || "") === a), hasTx = (t, a) => state.txns.some(x => x.ticker === t && (x.account || "") === a);
+  let nH = 0, nP = 0, nT = 0, nSkip = 0;
+  if (B.kind === "positions") {
+    for (const i of B.items) { const a = acctOf(i), ex = hold(i.ticker, a);
+      if (ex && hasTx(i.ticker, a)) { nSkip++; continue; }
+      const data = { shares: i.qty, cost: +i.cost.toFixed(4) };
+      if (ex) jobs.push(() => store.update("holdings", ex.id, { ...data, name: ex.name || i.name }));
+      else jobs.push(() => store.set("holdings", "imp_h_" + hashOf(key(i.ticker, a)), { ticker: i.ticker, account: a, name: i.name, dps: 0, freq: 4, ...data }));
+      nH++; }
+  } else {
+    const taxes = {}; B.items.filter(i => i.k === "tax").forEach(i => { const k = [i.date, i.ticker, acctOf(i)].join("|"); taxes[k] = (taxes[k] || 0) + i.amount; });
+    const have = new Set(state.payments.filter(p => !String(p.id).startsWith("imp_")).map(p => [p.date, p.ticker, p.amount, p.account || ""].join("|")));
+    for (const i of B.items.filter(i => i.k === "div")) { const a = acctOf(i), amount = r2(i.amount), tk = [i.date, i.ticker, a].join("|");
+      if (have.has([i.date, i.ticker, amount, a].join("|"))) { nSkip++; continue; }
+      const tax = Math.min(amount, r2(taxes[tk] || 0)); delete taxes[tk];
+      const id = uid("imp_p_", [i.date, i.ticker, amount, a].join("|"));
+      jobs.push(() => store.set("dividends", id, { ticker: i.ticker, amount, shares: 0, date: i.date, account: a, notes: "Imported", drip: false, dripPrice: 0, tax })); nP++; }
+    if (mode !== "div") {
+      const trades = B.items.filter(i => i.k === "buy" || i.k === "sell"), groups = {};
+      trades.forEach(i => (groups[key(i.ticker, acctOf(i))] ??= []).push(i));
+      for (const [k, list] of Object.entries(groups)) { const [t, a] = [list[0].ticker, acctOf(list[0])], ex = hold(t, a);
+        if (!ex) jobs.push(() => store.set("holdings", "imp_h_" + hashOf(k), { ticker: t, account: a, name: "", shares: 0, cost: 0, dps: 0, freq: 4 }));
+        else if (mode === "add" && ex.shares > 0 && !hasTx(t, a)) jobs.push(() => store.set("transactions", "imp_o_" + hashOf(k), { ticker: t, account: a, type: "buy", shares: +ex.shares, price: +ex.cost || 0, date: addDays(list.map(i => i.date).sort()[0], -1), opening: true }));
+        for (const i of list) { const id = uid("imp_t_", [i.date, t, a, i.k, i.qty, i.price].join("|"));
+          jobs.push(() => store.set("transactions", id, { ticker: t, account: a, type: i.k, shares: i.qty, price: +i.price.toFixed(4), date: i.date, ...(i.drip ? { drip: true } : {}) })); nT++; } }
+    }
+  }
+  for (let i = 0; i < jobs.length; i += 25) await Promise.all(jobs.slice(i, i + 25).map(j => j()));
+  return B.kind === "positions" ? `Imported ${nH} holding${nH === 1 ? "" : "s"}${nSkip ? `, left ${nSkip} with transactions alone` : ""}`
+    : `Imported ${nP} dividend${nP === 1 ? "" : "s"}${mode !== "div" ? ` and ${nT} trade${nT === 1 ? "" : "s"}` : ""}${nSkip ? `, skipped ${nSkip} already logged` : ""}`;
+}
+
 /* ───────── Backup & restore ───────── */
 const SCHEMA = {
-  dividends: { ticker: "s", amount: "n", shares: "n", date: "s", account: "s", notes: "s", drip: "b", dripPrice: "n" },
+  dividends: { ticker: "s", amount: "n", shares: "n", date: "s", account: "s", notes: "s", drip: "b", dripPrice: "n", tax: "n" },
   holdings: { ticker: "s", name: "s", sector: "s", account: "s", shares: "n", cost: "n", dps: "n", freq: "n", nextPay: "s", exDate: "s", price: "n" },
   transactions: { ticker: "s", account: "s", type: "s", shares: "n", price: "n", date: "s", opening: "b", drip: "b", payId: "s" },
   watchlist: { ticker: "s", name: "s", notes: "s", target: "n", dir: "s" },
@@ -925,7 +1034,7 @@ const ACTS = {
   "add-txn": t => openTxn(null, t.dataset.id), "edit-txn": t => openTxn(t.dataset.id), "add-watch": () => openWatch(), "edit-watch": t => openWatch(t.dataset.id),
   paid: t => openPay(null, { ticker: t.dataset.t, account: t.dataset.a, date: t.dataset.d, amount: +t.dataset.amt, shares: +t.dataset.sh || "" }),
   skip: t => store.set("settings", "main", { skips: { ...(settings().skips || {}), [`${t.dataset.t}|${t.dataset.a}|${t.dataset.d}`]: 1 } }).then(() => toast("Skipped")).catch(() => toast("Couldn't save that")),
-  backup: exportBackup, restore: () => $("#bakFile").click(),
+  backup: exportBackup, restore: () => $("#bakFile").click(), broker: () => $("#brokerFile").click(), taxcsv: exportTax,
   csv: exportCsv, import: () => $("#csvFile").click(), ics: exportIcs, dismiss: () => { state.banner = ""; state.apiErr = ""; render(); }
 };
 function go(tab) { state.tab = tab; render(); if (tab === "market") loadMarketTab(); if (tab === "insights") loadInsights(); window.scrollTo({ top: 0 }); }
@@ -950,6 +1059,8 @@ document.addEventListener("change", e => {
   else if (e.target.dataset.proj) { const k = e.target.dataset.proj, v = parseFloat(e.target.value); state.proj[k] = isFinite(v) ? Math.max(k === "contrib" ? 0 : -20, Math.min(k === "contrib" ? 1e6 : 30, v)) : 0;
     try { localStorage.setItem("dt_proj", JSON.stringify(state.proj)); } catch {} render(); }
   else if (e.target.id === "csvFile") { const f = e.target.files[0]; e.target.value = ""; if (f && store) importCsv(f); }
+  else if (e.target.id === "taxYear") { state.taxYear = e.target.value; render(); }
+  else if (e.target.id === "brokerFile") { const f = e.target.files[0]; e.target.value = ""; if (f && store) readBroker(f); }
   else if (e.target.id === "bakFile") { const f = e.target.files[0]; e.target.value = ""; if (f && store) readBackup(f); }
 });
 
