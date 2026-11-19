@@ -10,6 +10,10 @@ A single-page web app for tracking dividend income, synced with Firebase Firesto
 - **Portfolio:** holdings with buy/sell transactions, average cost, gains, yield and yield on cost; multiple portfolios with a filter
 - **Dividends:** payment log, income-by-month table with yearly growth, CSV import and export; reinvested dividends (DRIP) add a buy transaction
 - **Broker import:** reads position and activity CSV exports (tested with Fidelity, Schwab and Robinhood style files); re-importing doesn't duplicate
+- **Installable app:** works offline and installs to your home screen (PWA with a service worker)
+- **Reminders:** optional browser notifications for ex-dividend dates, due payments and watchlist targets
+- **Reports:** Excel workbook and PDF income/tax report for a year
+- **Help tips:** "?" buttons explain yield on cost, payout ratio and more
 - **Tax view:** tax withheld per payment, a yearly summary by portfolio, and a downloadable report
 - **Mark as paid:** expected dividends that have come due can be confirmed or skipped in one click
 - **Backup:** download everything as one JSON file and restore it (merge or replace); API keys are not included
@@ -33,4 +37,4 @@ Sign-in is with Google. Each user's data lives under `users/{uid}/` (dividends, 
 2. Authentication → Settings → Authorized domains: add `mubasheermk.github.io`.
 3. Firestore Database → Rules: publish the contents of [`firestore.rules`](firestore.rules). They limit each user to their own data and check every field that is written.
 
-The app is plain HTML, CSS and JavaScript (`index.html`, `styles.css`, `app.js`); there is no build step.
+The app is plain HTML, CSS and JavaScript (`index.html`, `styles.css`, `app.js`), plus `sw.js`, `manifest.webmanifest` and `icons/`; there is no build step. Excel/PDF reports load SheetJS and jsPDF from a CDN on first use.

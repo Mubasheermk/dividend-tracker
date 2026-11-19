@@ -78,7 +78,10 @@ async function initCloud() {
     const app = initializeApp(firebaseConfig);
     if (APP_CHECK_KEY) try { const ac = await import(base + "firebase-app-check.js"); ac.initializeAppCheck(app, { provider: new ac.ReCaptchaEnterpriseProvider(APP_CHECK_KEY), isTokenAutoRefreshEnabled: true }); }
       catch (e) { console.warn("App Check failed to start:", e); }
-    fb = { fs, au, db: fs.getFirestore(app), auth: au.getAuth(app), user: null };
+    let db;                                // keep data available offline when the browser allows it
+    try { db = fs.initializeFirestore(app, { localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }) }); }
+    catch (e) { console.warn("Offline cache unavailable:", e); db = fs.getFirestore(app); }
+    fb = { fs, au, db, auth: au.getAuth(app), user: null };
     import(base + "firebase-analytics.js").then(m => m.isSupported().then(ok => ok && m.getAnalytics(app))).catch(() => {});
     au.onAuthStateChanged(fb.auth, user => (user ? startSync(user) : signedOut()));
   } catch (e) {
@@ -163,7 +166,7 @@ async function refreshMarket(force) {
     render();
     const from = addDays(today(), -7), to = addDays(today(), 100), E = [];
     await pool(T, async t => { const r = await fh("/calendar/earnings", { from, to, symbol: t }, 720); (r?.earningsCalendar || []).forEach(e => e.date && E.push({ date: e.date, ticker: t, hour: e.hour, eps: e.epsEstimate })); });
-    state.earnings = E; saveSnapshot();
+    state.earnings = E; saveSnapshot(); checkReminders();
   } catch (e) { console.warn(e); state.apiErr = e.message; }
   state.busy = false; render();
 }
@@ -242,7 +245,7 @@ async function syncDividends(force) {
 }
 
 let readyDone = false;
-function onReady() { if (readyDone) return; readyDone = true; refreshMarket(); syncDividends(); }
+function onReady() { if (readyDone) return; readyDone = true; refreshMarket(); syncDividends(); checkReminders(); initReminderTimer(); }
 
 /* ───────── Calculations ───────── */
 function positions(all) {
@@ -412,8 +415,8 @@ function viewDashboard() {
     </div>
   </section>
   <section class="grid2 even">
-    <div class="card panel"><div class="panel-head"><h2>Allocation</h2>${seg("alloc", state.alloc, [["holding", "Holding"], ["sector", "Sector"]])}</div>${allocation(s.pos)}</div>
-    <div class="card panel"><div class="panel-head"><h2>Top payers</h2><span class="hint">12 months</span></div>
+    <div class="card panel"><div class="panel-head"><h2>Allocation${tip('allocation')}</h2>${seg("alloc", state.alloc, [["holding", "Holding"], ["sector", "Sector"]])}</div>${allocation(s.pos)}</div>
+    <div class="card panel"><div class="panel-head"><h2>Top payers${tip('toppay')}</h2><span class="hint">12 months</span></div>
       ${top.length ? `<div class="rank">${top.map(([t, o], i) => `<div class="rank-row">${badge(t)}
           <div><div class="tk-name">${esc(t)}</div><div class="tk-sub">${o.n} payment${o.n > 1 ? "s" : ""} · ${(o.v / s.ttm * 100).toFixed(0)}%</div></div>
           <div class="num">${usd(o.v)}</div><div class="track"><div class="fill" style="width:${(o.v / topMax * 100).toFixed(1)}%;background:${PAL[i % PAL.length]}"></div></div></div>`).join("")}</div>` : `<p class="muted">No payments in the last 12 months.</p>`}</div>
@@ -474,7 +477,7 @@ function viewDividends() {
   const ty = years.includes(state.taxYear) ? state.taxYear : years[0], TP = P.filter(p => p.date.startsWith(ty || "x")), byA = {};
   TP.forEach(p => { const a = (byA[p.account || ""] ??= { n: 0, g: 0, t: 0 }); a.n++; a.g += p.amount; a.t += p.tax || 0; });
   const tg = sum(TP, p => p.amount), tt = sum(TP, p => p.tax || 0);
-  const tax = years.length ? `<div class="card" style="margin-bottom:22px"><div class="panel-head" style="padding:20px 22px 0;margin-bottom:8px"><h2>Tax summary</h2>
+  const tax = years.length ? `<div class="card" style="margin-bottom:22px"><div class="panel-head" style="padding:20px 22px 0;margin-bottom:8px"><h2>Tax summary${tip('tax')}</h2>
       <select class="input" id="taxYear" aria-label="Tax year" style="padding:6px 10px;font-size:13px">${years.map(y => `<option ${y === ty ? "selected" : ""}>${y}</option>`).join("")}</select>
       <button class="btn sm" data-act="taxcsv">Download report</button></div>
     <div class="table-wrap"><table><thead><tr><th>Portfolio</th><th class="r hide-sm">Payments</th><th class="r">Dividends</th><th class="r">Tax withheld</th><th class="r">After tax</th></tr></thead><tbody>
@@ -629,11 +632,11 @@ function viewInsights() {
     <p class="muted" style="margin:12px 0 0;font-size:12.5px">An illustration, not a forecast. It starts from today's ${s.value ? "portfolio value" : "invested amount"} of ${usd(v0, 0)} and yield of ${pct(y0)}, holds the growth rates constant, and ignores taxes and fees.</p>`
     : `<p class="muted">Add dividend amounts to your holdings to project future income.</p>`;
   return `
-  <section class="card panel" style="margin-bottom:16px"><div class="panel-head"><h2>Income by calendar month</h2><span class="hint">Next 12 months, expected</span></div>${coverage}</section>
-  <section class="card" style="margin-bottom:16px"><div class="panel-head" style="padding:20px 22px 0;margin-bottom:8px"><h2>Dividend health</h2><span class="hint">${state.ins.busy ? "Loading…" : "Per holding"}</span></div>
+  <section class="card panel" style="margin-bottom:16px"><div class="panel-head"><h2>Income by calendar month${tip('coverage')}</h2><span class="hint">Next 12 months, expected</span></div>${coverage}</section>
+  <section class="card" style="margin-bottom:16px"><div class="panel-head" style="padding:20px 22px 0;margin-bottom:8px"><h2>Dividend health${tip('health')}</h2><span class="hint">${state.ins.busy ? "Loading…" : "Per holding"}</span></div>
     <div class="table-wrap"><table><thead><tr><th>Holding</th><th class="r">Div / share</th><th class="r">Vs a year ago</th><th class="r hide-sm">5-year growth</th><th class="r">Payout ratio</th><th class="r hide-sm">Yield</th></tr></thead><tbody>${rows}</tbody></table></div>
     <p class="muted" style="padding:0 22px 18px;margin:10px 0 0;font-size:12.5px">Payout ratio is dividends as a share of earnings; above 100% means the company pays out more than it earns. Funds usually have no payout ratio or growth figure. A dash under "Vs a year ago" means there isn't a full year of dividend history for that holding yet. * A very large jump can be a real increase or a share split in the history. ${srcNote}</p></section>
-  <section class="card panel"><div class="panel-head"><h2>Income projection</h2><span class="hint">20 years</span></div>${projection}</section>`;
+  <section class="card panel"><div class="panel-head"><h2>Income projection${tip('projection')}</h2><span class="hint">20 years</span></div>${projection}</section>`;
 }
 
 const VIEWS = { dashboard: viewDashboard, portfolio: viewPortfolio, dividends: viewDividends, calendar: viewCalendar, insights: viewInsights, watchlist: viewWatchlist, market: viewMarket };
@@ -643,6 +646,7 @@ function render() {
   const app = state.mode === "cloud" || state.mode === "local";
   document.querySelectorAll(".app-only").forEach(e => (e.hidden = !app));
   $("#refreshBtn").hidden = !app || !(settings().finnhubKey || settings().massiveKey);
+  $("#installBtn").hidden = !app || !deferredInstall;
   $("#logoutBtn").hidden = !(fb && fb.user);
   $("#cPay").textContent = state.payments.filter(inAcct).length; $("#cHold").textContent = state.holdings.filter(inAcct).length; $("#cWatch").textContent = state.watch.length;
   const msgs = [state.banner, state.apiErr && `<b>Market data:</b> ${esc(state.apiErr)}`].filter(Boolean);
@@ -821,7 +825,8 @@ function openSettings() {
     { id: "massiveKey", label: "Massive API key", opt: 1, full: 1, type: "password", value: s.massiveKey, max: 80, hint: "Free key from massive.com. Fills in each holding's dividend per share, frequency, next pay date and ex-dividend date." },
     { id: "goal", label: "Annual dividend income goal ($)", opt: 1, full: 1, type: "number", value: s.goal || "" } ],
     extra: `<div class="backup"><div><b>Backup</b><div class="muted">${(() => { try { const d = localStorage.getItem("dt_lastBackup"); return d ? "Last backup from this device: " + fmtDate(d) : "No backup made from this device yet"; } catch { return ""; } })()}. API keys are not included.</div></div>
-        <button type="button" class="btn sm" data-act="backup">Download backup</button><button type="button" class="btn sm" data-act="restore">Restore…</button></div>` +
+        <button type="button" class="btn sm" data-act="backup">Download backup</button><button type="button" class="btn sm" data-act="restore">Restore…</button></div>`
+      + reminderBlockHtml() + reportBlockHtml() +
       (who ? `<p class="muted" style="margin:14px 0 0;font-size:13px">Signed in as <b>${who}</b> · <button type="button" class="btn sm ghost" data-act="signout">Sign out</button></p>` : ""),
     onSave: async v => { const changed = v.finnhubKey !== (s.finnhubKey || ""); const mvChanged = v.massiveKey !== (s.massiveKey || "");
       await store.set("settings", "main", { finnhubKey: v.finnhubKey, massiveKey: v.massiveKey, goal: v.goal || 0 });
@@ -1031,6 +1036,160 @@ function exportIcs() {
   toast(`Exported ${E.length} events`);
 }
 
+
+/* ───────── Help tips ───────── */
+const TIPS = {
+  yield: "Dividend yield is the annual dividend divided by the current share price.",
+  yoc: "Yield on cost is the annual dividend divided by what you paid per share, not today's price. It shows what your original investment now earns.",
+  payout: "Payout ratio is dividends as a share of company earnings. Above 100% means a company pays out more than it earns; funds and REITs often show none.",
+  allocation: "How your portfolio is split — by market value when prices are known, otherwise by projected income.",
+  toppay: "The holdings that paid you the most over the last 12 months.",
+  health: "A quick read on each dividend: the change from a year ago, its 5-year growth, and how much of earnings it uses (payout ratio).",
+  coverage: "Expected income in each calendar month over the next year, so you can see which months are light.",
+  projection: "A what-if, not a forecast: it grows today's income by the rates you set and ignores taxes and fees.",
+  tax: "Totals of the tax you logged as withheld, for your own records. Your broker's 1099-DIV is the official figure, and it also splits qualified from ordinary dividends."
+};
+const tip = id => TIPS[id] ? ` <button class="tipbtn" type="button" data-tip="${id}" aria-label="What's this?" aria-expanded="false">?</button>` : "";
+let tipEl = null, tipPinned = null;
+function tipBox() { if (!tipEl) { tipEl = document.createElement("div"); tipEl.className = "tipbox"; tipEl.setAttribute("role", "tooltip"); document.body.appendChild(tipEl); } return tipEl; }
+function showTip(btn) {
+  const box = tipBox(); box.textContent = TIPS[btn.dataset.tip] || ""; box.style.display = "block";
+  const r = btn.getBoundingClientRect(), w = Math.min(280, window.innerWidth - 24);
+  box.style.width = w + "px";
+  let left = r.left + window.scrollX, top = r.bottom + window.scrollY + 8;
+  left = Math.max(12 + window.scrollX, Math.min(left, window.scrollX + window.innerWidth - w - 12));
+  box.style.left = left + "px"; box.style.top = top + "px";
+}
+function hideTip() { if (tipEl) tipEl.style.display = "none"; if (tipPinned) tipPinned.setAttribute("aria-expanded", "false"); tipPinned = null; }
+document.addEventListener("mouseover", e => { const b = e.target.closest(".tipbtn"); if (b && !tipPinned) showTip(b); });
+document.addEventListener("mouseout", e => { const b = e.target.closest(".tipbtn"); if (b && !tipPinned) hideTip(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") hideTip(); });
+
+/* ───────── Reminders (local notifications; the app shows them while it's open) ───────── */
+const REMIND_DAYS = 3;
+const supportsNotify = () => "Notification" in window;
+function remindersOn() { try { return localStorage.getItem("dt_remind") === "1" && supportsNotify() && Notification.permission === "granted"; } catch { return false; } }
+const notifiedMap = () => { try { return JSON.parse(localStorage.getItem("dt_notified")) || {}; } catch { return {}; } };
+const saveNotified = m => { try { localStorage.setItem("dt_notified", JSON.stringify(m)); } catch {} };
+async function showNote(title, body) {
+  const opts = { body, icon: "icons/icon-192.png", badge: "icons/icon-192.png", tag: "dividend-tracker" };
+  try { const reg = navigator.serviceWorker && await navigator.serviceWorker.ready; if (reg && reg.showNotification) return reg.showNotification(title, opts); } catch {}
+  try { new Notification(title, opts); } catch {}
+}
+function checkReminders() {
+  if (!remindersOn() || !store) return;
+  const m = notifiedMap(), t0 = today(), end = addDays(t0, REMIND_DAYS), out = [];
+  events().filter(e => e.type === "ex" && e.date >= t0 && e.date <= end).forEach(e => { const k = `ex|${e.ticker}|${e.date}`; if (!m[k]) { m[k] = t0; out.push(`${e.ticker} goes ex-dividend ${fmtDate(e.date)}`); } });
+  dueList().forEach(e => { const k = `due|${e.ticker}|${e.account || ""}|${e.date}`; if (!m[k]) { m[k] = t0; out.push(`${e.ticker} dividend expected around ${fmtDate(e.date)} — confirm it`); } });
+  state.watch.forEach(w => { const q = state.quotes[w.ticker]; if (!(q && q.c && w.target)) return;
+    const hit = w.dir === "above" ? q.c >= w.target : q.c <= w.target, k = `tgt|${w.ticker}|${w.target}|${w.dir}`;
+    if (hit && !m[k]) { m[k] = t0; out.push(`${w.ticker} hit your ${w.dir === "above" ? "≥" : "≤"} ${usd(w.target)} target (now ${usd(q.c)})`); }
+    if (!hit && m[k]) delete m[k]; });
+  saveNotified(m);
+  if (out.length === 1) showNote("Dividend Tracker", out[0]);
+  else if (out.length > 1) showNote(`${out.length} dividend reminders`, out.join("\n"));
+}
+let remindTimer = 0;
+function initReminderTimer() { if (remindTimer) return; remindTimer = setInterval(checkReminders, 30 * 60 * 1000); document.addEventListener("visibilitychange", () => { if (!document.hidden) checkReminders(); }); }
+async function enableReminders() {
+  if (!supportsNotify()) return toast("Notifications aren't supported in this browser");
+  let p = Notification.permission;
+  if (p !== "granted") { try { p = await Notification.requestPermission(); } catch { p = "denied"; } }
+  if (p === "granted") { try { localStorage.setItem("dt_remind", "1"); } catch {} toast("Reminders turned on"); checkReminders(); }
+  else toast("Notifications are blocked — allow them in your browser settings");
+  if ($("#dlg").open) openSettings();
+}
+function reminderBlockHtml() {
+  const on = remindersOn(), blocked = supportsNotify() && Notification.permission === "denied";
+  return `<div class="backup" style="margin-top:12px"><div><b>Reminders</b><div class="muted">${
+    !supportsNotify() ? "Not supported in this browser." :
+    blocked ? "Blocked in your browser settings. Allow notifications for this site, then turn them on." :
+    on ? "On. You'll be reminded about ex-dividend dates, due payments and price targets while the app is open." :
+    "Get notified about ex-dividend dates, due payments and watchlist price targets."}</div></div>${
+    supportsNotify() && !blocked ? (on ? `<button type="button" class="btn sm" data-act="remind-off">Turn off</button>` : `<button type="button" class="btn sm primary" data-act="remind-on">Turn on reminders</button>`) : ""}</div>`;
+}
+function reportBlockHtml() {
+  return `<div class="backup" style="margin-top:12px"><div><b>Reports</b><div class="muted">An income and tax report for the year, as an Excel workbook or a PDF.</div></div>
+    <button type="button" class="btn sm" data-act="excel">Excel</button><button type="button" class="btn sm" data-act="pdf">PDF</button></div>`;
+}
+
+/* ───────── Install (PWA) ───────── */
+let deferredInstall = null;
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); deferredInstall = e; if (store) render(); });
+window.addEventListener("appinstalled", () => { deferredInstall = null; toast("App installed"); if (store) render(); });
+async function doInstall() {
+  if (deferredInstall) { deferredInstall.prompt(); try { await deferredInstall.userChoice; } catch {} deferredInstall = null; render(); return; }
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  toast(ios ? "In Safari: Share → Add to Home Screen" : "Use your browser's menu → Install app");
+}
+
+/* ───────── Reports (Excel / PDF, libraries loaded on demand) ───────── */
+const CDN = { xlsx: "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
+  jspdf: "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js",
+  autotable: "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js" };
+function loadScript(src) { return new Promise((res, rej) => { if ([...document.scripts].some(s => s.src === src)) return res();
+  const s = document.createElement("script"); s.src = src; s.onload = () => res(); s.onerror = () => rej(new Error("load failed")); document.head.appendChild(s); }); }
+function reportData(year) {
+  const P = state.payments.filter(inAcct).filter(p => p.date.startsWith(year)).sort((a, b) => a.date.localeCompare(b.date));
+  const months = Array(12).fill(0); P.forEach(p => months[+p.date.slice(5, 7) - 1] += p.amount);
+  const byH = {}; P.forEach(p => { const h = (byH[p.ticker] ??= { n: 0, g: 0, t: 0 }); h.n++; h.g += p.amount; h.t += p.tax || 0; });
+  const s = stats();
+  return { P, months, byH, gross: sum(P, p => p.amount), tax: sum(P, p => p.tax || 0), s,
+    pos: s.pos.filter(p => p.shares > 0).sort((a, b) => b.income - a.income) };
+}
+async function exportReport(kind) {
+  const years = uniq(state.payments.filter(inAcct).map(p => p.date.slice(0, 4))).reverse();
+  const year = years.includes(state.taxYear) ? state.taxYear : years[0];
+  if (!year) return toast("No payments to report yet");
+  toast("Building report…");
+  try {
+    const R = reportData(year), acctLabel = state.acct === "all" ? "All portfolios" : state.acct;
+    if (kind === "xlsx") {
+      if (!window.XLSX) await loadScript(CDN.xlsx); const XLSX = window.XLSX, wb = XLSX.utils.book_new();
+      const summary = [["Dividend Tracker — Income Report"], ["Year", year], ["Portfolios", acctLabel], ["Generated", today()], [],
+        ["Dividends received", R.gross], ["Tax withheld", R.tax], ["After tax", R.gross - R.tax], ["Payments", R.P.length],
+        ["Holdings", R.pos.length], ["Projected annual income", R.s.projected]];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), "Summary");
+      const pay = [["Date", "Ticker", "Amount", "Tax withheld", "Shares", "Account", "Notes"],
+        ...R.P.map(p => [p.date, p.ticker, p.amount, p.tax || 0, p.shares || "", p.account || "", p.notes || ""])];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pay), "Payments");
+      const mon = [["Month", "Income"], ...R.months.map((v, i) => [MONTHS[i], v])];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(mon), "By Month");
+      const bh = [["Ticker", "Payments", "Dividends", "Tax withheld", "After tax"],
+        ...Object.entries(R.byH).sort((a, b) => b[1].g - a[1].g).map(([t, h]) => [t, h.n, h.g, h.t, h.g - h.t])];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(bh), "By Holding");
+      const hold = [["Ticker", "Name", "Shares", "Avg cost", "Price", "Value", "Div/share", "Frequency", "Annual income", "Yield", "Yield on cost", "Sector", "Account"],
+        ...R.pos.map(p => [p.ticker, p.name || "", +p.shares.toFixed(4), p.cost || "", p.price || "", p.price ? +p.value.toFixed(2) : "", p.dps || "", FREQ[p.freq] || "", +p.income.toFixed(2), isFinite(p.yld) ? +(p.yld).toFixed(4) : "", isFinite(p.yoc) ? +(p.yoc).toFixed(4) : "", p.sector || "", p.account || ""])];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hold), "Holdings");
+      XLSX.writeFile(wb, `dividend-report-${year}.xlsx`);
+      toast("Excel report downloaded");
+    } else {
+      if (!(window.jspdf && window.jspdf.jsPDF)) await loadScript(CDN.jspdf);
+      if (!(window.jspdf.jsPDF.API && window.jspdf.jsPDF.API.autoTable)) await loadScript(CDN.autotable);
+      const doc = new window.jspdf.jsPDF({ unit: "pt", format: "letter" }), W = doc.internal.pageSize.getWidth();
+      doc.setFillColor(124, 58, 237); doc.rect(0, 0, W, 70, "F");
+      doc.setTextColor(255); doc.setFontSize(18); doc.setFont("helvetica", "bold"); doc.text("Dividend Tracker", 40, 34);
+      doc.setFontSize(12); doc.setFont("helvetica", "normal"); doc.text(`${year} Income Report · ${acctLabel}`, 40, 54);
+      doc.setTextColor(30); doc.setFontSize(11);
+      const tiles = [["Dividends received", usd(R.gross)], ["Tax withheld", usd(R.tax)], ["After tax", usd(R.gross - R.tax)],
+        ["Payments", String(R.P.length)], ["Holdings", String(R.pos.length)], ["Projected annual", usd(R.s.projected)]];
+      let y = 96; tiles.forEach((t, i) => { const x = 40 + (i % 3) * ((W - 80) / 3); if (i % 3 === 0 && i) y += 48;
+        doc.setFont("helvetica", "normal"); doc.setTextColor(120); doc.setFontSize(9); doc.text(t[0].toUpperCase(), x, y);
+        doc.setTextColor(20); doc.setFont("helvetica", "bold"); doc.setFontSize(14); doc.text(t[1], x, y + 18); });
+      const theme = { headStyles: { fillColor: [124, 58, 237] }, styles: { fontSize: 9 }, margin: { left: 40, right: 40 } };
+      doc.autoTable({ ...theme, startY: y + 40, head: [["Month", "Income"]], body: R.months.map((v, i) => [MONTHS[i], usd(v)]),
+        foot: [["Total", usd(R.gross)]], footStyles: { fillColor: [245, 243, 255], textColor: 20, fontStyle: "bold" } });
+      doc.autoTable({ ...theme, startY: doc.lastAutoTable.finalY + 20, head: [["Holding", "Payments", "Dividends", "Tax", "After tax"]],
+        body: Object.entries(R.byH).sort((a, b) => b[1].g - a[1].g).map(([t, h]) => [t, h.n, usd(h.g), h.t ? usd(h.t) : "—", usd(h.g - h.t)]) });
+      const pages = doc.internal.getNumberOfPages();
+      for (let i = 1; i <= pages; i++) { doc.setPage(i); doc.setFontSize(8); doc.setTextColor(150);
+        doc.text(`Page ${i} of ${pages} · generated ${today()} · not tax advice`, 40, doc.internal.pageSize.getHeight() - 20); }
+      doc.save(`dividend-report-${year}.pdf`);
+      toast("PDF report downloaded");
+    }
+  } catch (e) { console.error(e); toast("Couldn't build the report (needs a connection the first time)"); }
+}
+
 /* ───────── Events ───────── */
 const ACTS = {
   signin: signIn, signout: () => { $("#dlg").close(); fb.au.signOut(fb.auth); }, settings: openSettings, sample: (t) => { t.disabled = true; loadSample(); },
@@ -1039,6 +1198,8 @@ const ACTS = {
   paid: t => openPay(null, { ticker: t.dataset.t, account: t.dataset.a, date: t.dataset.d, amount: +t.dataset.amt, shares: +t.dataset.sh || "" }),
   skip: t => store.set("settings", "main", { skips: { ...(settings().skips || {}), [`${t.dataset.t}|${t.dataset.a}|${t.dataset.d}`]: 1 } }).then(() => toast("Skipped")).catch(() => toast("Couldn't save that")),
   backup: exportBackup, restore: () => $("#bakFile").click(), broker: () => $("#brokerFile").click(), taxcsv: exportTax,
+  excel: () => exportReport("xlsx"), pdf: () => exportReport("pdf"), install: doInstall,
+  "remind-on": enableReminders, "remind-off": () => { try { localStorage.setItem("dt_remind", "0"); } catch {} toast("Reminders turned off"); if ($("#dlg").open) openSettings(); },
   csv: exportCsv, import: () => $("#csvFile").click(), ics: exportIcs, dismiss: () => { state.banner = ""; state.apiErr = ""; render(); }
 };
 function go(tab) { state.tab = tab; render(); if (tab === "market") loadMarketTab(); if (tab === "insights") loadInsights(); window.scrollTo({ top: 0 }); }
@@ -1054,6 +1215,7 @@ document.addEventListener("click", e => {
   else if (t.id === "addBtn") { if (store) openPay(); }
   else if (t.id === "settingsBtn") { if (store) openSettings(); }
   else if (t.id === "refreshBtn") { refreshMarket(true); syncDividends(true); }
+  else if (t.id === "installBtn") doInstall();
   else if (t.id === "themeBtn") { const n = document.documentElement.dataset.theme === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = n; try { localStorage.setItem("dt_theme", n); } catch {} }
 });
 document.addEventListener("input", e => { if (e.target.id === "q") { state.q = e.target.value; render(); } });
@@ -1068,7 +1230,17 @@ document.addEventListener("change", e => {
   else if (e.target.id === "bakFile") { const f = e.target.files[0]; e.target.value = ""; if (f && store) readBackup(f); }
 });
 
+// Pin a help tip on click; close it when clicking elsewhere.
+document.addEventListener("click", e => {
+  const b = e.target.closest(".tipbtn");
+  if (b) { if (tipPinned === b) { hideTip(); } else { tipPinned = null; showTip(b); tipPinned = b; b.setAttribute("aria-expanded", "true"); } return; }
+  if (tipPinned && e.target !== tipBox()) hideTip();
+}, true);
+
 try { const th = localStorage.getItem("dt_theme"); if (th) document.documentElement.dataset.theme = th; } catch {}
 $("#today").textContent = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 render();
 initCloud();
+
+// Register the service worker so the app installs and works offline.
+if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(e => console.warn("SW registration failed:", e)));

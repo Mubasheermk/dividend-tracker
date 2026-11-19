@@ -329,3 +329,14 @@ dialog h3{background:var(--brand); -webkit-background-clip:text; background-clip
 .proj-inputs label{display:flex; flex-direction:column; gap:6px; font-size:12px; font-weight:700; color:var(--muted)}
 .proj-inputs .input{background:var(--surface2); font-weight:500; color:var(--text)}
 @media (max-width:560px){ .proj-inputs{grid-template-columns:1fr} }
+
+/* ── Help tips, install, safe areas ── */
+.tipbtn{width:18px;height:18px;border-radius:50%;border:1px solid var(--border);background:var(--surface2);color:var(--muted);font-size:11px;font-weight:700;line-height:1;padding:0;display:inline-grid;place-items:center;vertical-align:middle;cursor:help}
+.tipbtn:hover,.tipbtn[aria-expanded="true"]{color:var(--text);border-color:var(--violet)}
+.tipbox{position:absolute;z-index:60;max-width:280px;background:var(--text);color:var(--bg);padding:10px 12px;border-radius:10px;font-size:12.5px;font-weight:500;line-height:1.45;box-shadow:0 14px 34px -12px rgba(0,0,0,.6);display:none}
+#installBtn:hover{border-color:var(--violet);color:var(--violet)}
+@supports (padding: env(safe-area-inset-top)){
+  .wrap{padding-left:max(24px,env(safe-area-inset-left));padding-right:max(24px,env(safe-area-inset-right))}
+  header{padding-top:max(22px,env(safe-area-inset-top))}
+  @media (max-width:560px){ .wrap{padding-left:max(14px,env(safe-area-inset-left));padding-right:max(14px,env(safe-area-inset-right))} }
+}
