@@ -14,10 +14,10 @@ A single-page web app for tracking dividend income, synced with Firebase Firesto
 - **Reminders:** optional browser notifications for ex-dividend dates, due payments and watchlist targets
 - **Reports:** Excel workbook and PDF income/tax report for a year
 - **Help tips:** "?" buttons explain yield on cost, payout ratio and more
-- **Tax view:** tax withheld per payment, a yearly summary by portfolio, and a downloadable report
+- **Tax view:** tax withheld per payment, qualified vs ordinary split, taxable/retirement portfolios, a yearly summary and downloadable report
 - **Mark as paid:** expected dividends that have come due can be confirmed or skipped in one click
 - **Backup:** download everything as one JSON file and restore it (merge or replace); API keys are not included
-- **Calendar:** paid and expected dividends, ex-dividend dates and earnings, with `.ics` export
+- **Calendar:** paid and expected dividends (weekly, monthly, quarterly, semi-annual, annual), ex-dividend dates and earnings, with `.ics` export
 - **Insights:** expected income by calendar month with thin months flagged, dividend health per holding (change vs a year ago, 5-year growth, payout ratio), and a 20-year income projection
 - **Watchlist:** live prices and target-price alerts shown in the app
 - **Market:** news for your holdings, earnings dates and upcoming IPOs
@@ -27,7 +27,7 @@ A single-page web app for tracking dividend income, synced with Firebase Firesto
 Live prices, earnings, news and IPOs need a free [Finnhub](https://finnhub.io) API key, entered in Settings.
 It is stored in the signed-in user's Firestore settings, not in this repo. Without a key the app uses prices you enter.
 
-Dividend amounts and dates can be filled in automatically with a free [Massive](https://massive.com) API key, also entered in Settings.
+Dividend amounts and dates can be filled in automatically with a free [Massive](https://massive.com) API key, also entered in Settings. A per-holding option keeps figures you entered by hand from being overwritten.
 
 ## Setup
 

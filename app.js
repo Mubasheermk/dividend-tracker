@@ -44,7 +44,7 @@ const bad = m => { const e = new Error(m); e.user = true; throw e; };
 const settings = () => state.settingsDocs.find(d => d.id === "main") || {};
 const inAcct = x => state.acct === "all" || (x.account || "") === state.acct;
 const PAL = ["#8b5cf6", "#22d3ee", "#f472b6", "#facc15", "#34d399", "#fb923c", "#60a5fa", "#a1a1aa"];
-const FREQ = { 12: "Monthly", 4: "Quarterly", 2: "Semi-annual", 1: "Annual" };
+const FREQ = { 52: "Weekly", 12: "Monthly", 4: "Quarterly", 2: "Semi-annual", 1: "Annual" };
 const ICON = {
   edit: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
   plus: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
@@ -212,13 +212,13 @@ async function applyDividends(t, recs) {
   const R = recs.filter(r => r.cash_amount > 0 && r.ex_dividend_date && (!r.distribution_type || r.distribution_type === "recurring") && (!r.dividend_type || r.dividend_type === "CD"))
     .sort((a, b) => b.ex_dividend_date.localeCompare(a.ex_dividend_date));
   if (!R.length) return 0;
-  const L = R[0]; let f = [1, 2, 4, 12].includes(+L.frequency) ? +L.frequency : 0;
-  if (!f && R.length > 1) { const gap = (parse(R[0].ex_dividend_date) - parse(R[1].ex_dividend_date)) / 864e5; f = gap < 45 ? 12 : gap < 135 ? 4 : gap < 270 ? 2 : 1; }
-  f = f || 4; const t0 = today(), step = 12 / f;
-  const next = d => { if (!d || !isDate(d.slice(0, 10))) return ""; const a = parse(d.slice(0, 10)); for (let k = 0; k < 60; k++) { const x = iso(addMonths(a, k * step, a.getDate())); if (x >= t0) return x; } return ""; };
+  const L = R[0]; let f = [1, 2, 4, 12, 52].includes(+L.frequency) ? +L.frequency : 0;
+  if (!f && R.length > 1) { const gap = (parse(R[0].ex_dividend_date) - parse(R[1].ex_dividend_date)) / 864e5; f = gap < 10 ? 52 : gap < 45 ? 12 : gap < 135 ? 4 : gap < 270 ? 2 : 1; }
+  f = f || 4; const t0 = today(), weekly = f === 52, step = 12 / f;
+  const next = d => { if (!d || !isDate(d.slice(0, 10))) return ""; const a = parse(d.slice(0, 10)), base = iso(a); for (let k = 0; k < 400; k++) { const x = weekly ? addDays(base, k * 7) : iso(addMonths(a, k * step, a.getDate())); if (x >= t0) return x; } return ""; };
   const data = { dps: +(L.cash_amount * f).toFixed(4), freq: f, nextPay: next(L.pay_date), exDate: next(L.ex_dividend_date) };
   let n = 0;
-  for (const h of state.holdings.filter(h => h.ticker === t)) {
+  for (const h of state.holdings.filter(h => h.ticker === t && !h.lockDiv)) {
     if (Object.keys(data).every(k => String(h[k] ?? "") === String(data[k]))) continue;
     await store.update("holdings", h.id, data); n++;
   }
@@ -228,7 +228,7 @@ async function syncDividends(force) {
   if (!settings().massiveKey || divRun || !store) return;
   divRun = true; let n = 0, calls = 0;
   try {
-    const T = uniq(state.holdings.map(h => h.ticker));
+    const T = uniq(state.holdings.filter(h => !h.lockDiv).map(h => h.ticker));
     for (let i = 0; i < T.length; i++) {
       const t = T[i], ck = "dt_mv:" + t; let recs = null;
       try { const c = JSON.parse(localStorage.getItem(ck)); if (c && Date.now() - c.t < (force ? 36e5 : 6048e5)) recs = c.d; } catch {}
@@ -272,9 +272,9 @@ function schedule(months = 12) {
   const out = [], t0 = today(), end = iso(addMonths(new Date(), months)), back = addDays(t0, -DUE_DAYS), skips = settings().skips || {};
   for (const p of positions()) {
     if (!(p.shares > 0)) continue;
-    const f = +p.freq || 4, step = 12 / f, acct = p.account || "";
+    const f = +p.freq || 4, step = 12 / f, weekly = f === 52, acct = p.account || "";
     const paid = state.payments.filter(x => x.ticker === p.ticker && (x.account || "") === acct).map(x => x.date).sort();
-    const roll = (start, fn) => { const a = parse(start); for (let k = -60; k < 400; k++) { const d = iso(addMonths(a, k * step, a.getDate())); if (d > end) break; if (d >= back) fn(d); } };
+    const roll = (start, fn) => { const a = parse(start), base = iso(a); for (let k = -60; k < 520; k++) { const d = weekly ? addDays(base, k * 7) : iso(addMonths(a, k * step, a.getDate())); if (d > end) break; if (d >= back) fn(d); } };
     const anchor = p.nextPay || paid.at(-1);
     if (p.dps > 0 && anchor) roll(anchor, d => {
       const base = { date: d, ticker: p.ticker, amount: p.income / f, account: acct, shares: p.shares };
@@ -475,15 +475,21 @@ function viewDividends() {
     ${years.map(y => { const t = sum(M[y]), prev = M[y - 1] ? sum(M[y - 1]) : 0; return `<tr><td><b>${y}</b></td>${M[y].map(v => `<td class="c num" style="background:color-mix(in srgb, var(--violet) ${(v / mx * 60).toFixed(0)}%, transparent)">${v ? Math.round(v).toLocaleString("en-US") : '<span class="muted">·</span>'}</td>`).join("")}
       <td class="num"><b>${usd(t, 0)}</b></td><td class="num hide-sm ${prev ? cls(t - prev) : "muted"}">${prev ? spct((t - prev) / prev * 100) : "—"}</td></tr>`; }).join("")}</tbody></table></div></div>` : "";
   const ty = years.includes(state.taxYear) ? state.taxYear : years[0], TP = P.filter(p => p.date.startsWith(ty || "x")), byA = {};
-  TP.forEach(p => { const a = (byA[p.account || ""] ??= { n: 0, g: 0, t: 0 }); a.n++; a.g += p.amount; a.t += p.tax || 0; });
+  const acctTypes = settings().acctTypes || {}, typeOf = a => acctTypes[a] === "retirement" ? "retirement" : "taxable";
+  TP.forEach(p => { const a = (byA[p.account || ""] ??= { n: 0, g: 0, t: 0, q: 0, o: 0 }); a.n++; a.g += p.amount; a.t += p.tax || 0; if (p.qualified === "q") a.q += p.amount; else if (p.qualified === "o") a.o += p.amount; });
   const tg = sum(TP, p => p.amount), tt = sum(TP, p => p.tax || 0);
+  let taxG = 0, taxQ = 0, taxO = 0, retG = 0;
+  Object.entries(byA).forEach(([a, v]) => { if (typeOf(a) === "retirement") retG += v.g; else { taxG += v.g; taxQ += v.q; taxO += v.o; } });
+  const taxU = taxG - taxQ - taxO;
+  const typeSel = a => `<select class="input" data-acctype="${esc(a)}" aria-label="Account type for ${esc(a || "no portfolio")}" style="padding:4px 8px;font-size:12px">${[["taxable", "Taxable"], ["retirement", "Retirement"]].map(([k, l]) => `<option value="${k}" ${typeOf(a) === k ? "selected" : ""}>${l}</option>`).join("")}</select>`;
   const tax = years.length ? `<div class="card" style="margin-bottom:22px"><div class="panel-head" style="padding:20px 22px 0;margin-bottom:8px"><h2>Tax summary${tip('tax')}</h2>
       <select class="input" id="taxYear" aria-label="Tax year" style="padding:6px 10px;font-size:13px">${years.map(y => `<option ${y === ty ? "selected" : ""}>${y}</option>`).join("")}</select>
       <button class="btn sm" data-act="taxcsv">Download report</button></div>
-    <div class="table-wrap"><table><thead><tr><th>Portfolio</th><th class="r hide-sm">Payments</th><th class="r">Dividends</th><th class="r">Tax withheld</th><th class="r">After tax</th></tr></thead><tbody>
-    ${Object.entries(byA).sort((a, b) => b[1].g - a[1].g).map(([a, v]) => `<tr><td>${a ? esc(a) : '<span class="muted">No portfolio</span>'}</td><td class="r num hide-sm">${v.n}</td><td class="r num">${usd(v.g)}</td><td class="r num ${v.t ? "down" : "muted"}">${v.t ? "−" + usd(v.t) : "—"}</td><td class="r num amt">${usd(v.g - v.t)}</td></tr>`).join("")}</tbody>
-    <tfoot><tr><td>${ty} total</td><td class="r num hide-sm">${TP.length}</td><td class="r num">${usd(tg)}</td><td class="r num">${tt ? "−" + usd(tt) : "—"}</td><td class="r num">${usd(tg - tt)}</td></tr></tfoot></table></div>
-    <p class="muted" style="padding:0 22px 18px;margin:10px 0 0;font-size:12.5px">Totals of what you logged, by portfolio, for your own records. Your broker's 1099-DIV is the official figure, and it also splits qualified from ordinary dividends, which this doesn't.</p></div>` : "";
+    <div class="table-wrap"><table><thead><tr><th>Portfolio</th><th>Type</th><th class="r hide-sm">Payments</th><th class="r">Dividends</th><th class="r hide-sm">Qualified</th><th class="r hide-sm">Ordinary</th><th class="r">Tax</th><th class="r">After tax</th></tr></thead><tbody>
+    ${Object.entries(byA).sort((a, b) => b[1].g - a[1].g).map(([a, v]) => `<tr><td>${a ? esc(a) : '<span class="muted">No portfolio</span>'}</td><td>${typeSel(a)}</td><td class="r num hide-sm">${v.n}</td><td class="r num">${usd(v.g)}</td><td class="r num hide-sm">${v.q ? usd(v.q) : "—"}</td><td class="r num hide-sm">${v.o ? usd(v.o) : "—"}</td><td class="r num ${v.t ? "down" : "muted"}">${v.t ? "−" + usd(v.t) : "—"}</td><td class="r num amt">${usd(v.g - v.t)}</td></tr>`).join("")}</tbody>
+    <tfoot><tr><td colspan="2">${ty} total</td><td class="r num hide-sm">${TP.length}</td><td class="r num">${usd(tg)}</td><td class="r num hide-sm">${taxQ ? usd(taxQ) : "—"}</td><td class="r num hide-sm">${taxO ? usd(taxO) : "—"}</td><td class="r num">${tt ? "−" + usd(tt) : "—"}</td><td class="r num">${usd(tg - tt)}</td></tr></tfoot></table></div>
+    <p class="muted" style="padding:14px 22px 0;margin:0;font-size:13px">Taxable accounts: <b>${usd(taxG)}</b> in dividends${taxG ? ` — qualified ${usd(taxQ)}, ordinary ${usd(taxO)}${taxU > 0.005 ? `, unclassified ${usd(taxU)}` : ""}` : ""}.${retG ? ` Retirement accounts: <b>${usd(retG)}</b>, usually tax-deferred and not taxed this year.` : ""}</p>
+    <p class="muted" style="padding:6px 22px 18px;margin:0;font-size:12.5px">Qualified dividends are usually taxed at lower rates than ordinary ones; set each payment's type on its row. Totals are what you logged — your broker's 1099-DIV is the official figure.</p></div>` : "";
   return `${heat}${tax}
   <div class="toolbar">
     <input class="input search" id="q" type="search" placeholder="Search ticker, account, notes" value="${esc(state.q)}" aria-label="Search payments">
@@ -496,7 +502,7 @@ function viewDividends() {
       <th class="sortable hide-sm" data-sort="account">Account${arrow("account")}</th><th class="hide-sm">Notes</th><th class="r hide-sm">Shares</th><th class="sortable r" data-sort="amount">Amount${arrow("amount")}</th><th></th></tr></thead>
     <tbody>${rows.map(p => `<tr>
       <td class="num muted" style="white-space:nowrap">${fmtDate(p.date)}</td>
-      <td><div class="cell-tk">${badge(p.ticker)}<span class="tk-name">${esc(p.ticker)}</span>${p.drip ? '<span class="tag">DRIP</span>' : ""}</div></td>
+      <td><div class="cell-tk">${badge(p.ticker)}<span class="tk-name">${esc(p.ticker)}</span>${p.drip ? '<span class="tag">DRIP</span>' : ""}${p.qualified === "q" ? '<span class="tag">Qualified</span>' : p.qualified === "o" ? '<span class="tag">Ordinary</span>' : ""}</div></td>
       <td class="hide-sm">${p.account ? `<span class="tag">${esc(p.account)}</span>` : ""}</td>
       <td class="muted hide-sm">${esc(p.notes || "")}</td>
       <td class="r hide-sm">${p.shares > 0 ? `<div class="num">${(+p.shares).toLocaleString("en-US", { maximumFractionDigits: 4 })}</div><div class="tk-sub num">${usd(p.amount / p.shares, 4)} / share</div>` : '<span class="muted">—</span>'}</td>
@@ -725,6 +731,7 @@ function openPay(id, pre) {
     { id: "shares", label: "Number of shares", opt: 1, type: "number", value: (p?.shares ?? pre?.shares) || "", ph: "0", hint: "Shares that earned this payment" },
     { id: "date", label: "Pay date", type: "date", value: p?.date || pre?.date || today() },
     { id: "tax", label: "Tax withheld ($)", opt: 1, type: "number", value: p?.tax || "", ph: "0.00", hint: "Taken out before you were paid" },
+    { id: "qualified", label: "Dividend type", type: "select", value: p?.qualified || "", opts: [["", "Not sure"], ["q", "Qualified"], ["o", "Ordinary / non-qualified"]] },
     { id: "account", label: "Portfolio", opt: 1, value: p?.account ?? pre?.account ?? acctDefault(), ph: "Brokerage, Roth IRA…", list: "accounts", max: 40 },
     { id: "drip", label: "Reinvested (DRIP)", type: "select", value: p?.drip ? "yes" : "no", opts: [["no", "No, paid as cash"], ["yes", "Yes, bought more shares"]] },
     { id: "dripPrice", label: "Reinvest price / share ($)", opt: 1, type: "number", value: p?.dripPrice || "", ph: "0.00", hint: "Adds a buy transaction for the new shares" },
@@ -743,7 +750,7 @@ function openPay(id, pre) {
       v.ticker = up(v.ticker); if (!v.ticker) bad("Enter a ticker."); if (!(v.amount > 0)) bad("Enter an amount greater than zero."); if (!isDate(v.date)) bad("Pick a pay date.");
       const drip = v.drip === "yes"; if (drip && !(v.dripPrice > 0)) bad("Enter the price the dividend was reinvested at.");
       if (v.tax > v.amount) bad("Tax withheld can't be more than the dividend.");
-      const data = { ticker: v.ticker, amount: Math.round(v.amount * 100) / 100, shares: v.shares > 0 ? v.shares : 0, date: v.date, account: v.account, notes: v.notes, drip, dripPrice: drip ? v.dripPrice : 0, tax: v.tax > 0 ? Math.round(v.tax * 100) / 100 : 0 };
+      const data = { ticker: v.ticker, amount: Math.round(v.amount * 100) / 100, shares: v.shares > 0 ? v.shares : 0, date: v.date, account: v.account, notes: v.notes, drip, dripPrice: drip ? v.dripPrice : 0, tax: v.tax > 0 ? Math.round(v.tax * 100) / 100 : 0, qualified: ["q", "o"].includes(v.qualified) ? v.qualified : "" };
       let pid = id; if (p) await store.update("dividends", id, data); else pid = await store.add("dividends", data);
       if (drip || p?.drip) await syncDrip(pid, data);
       return p ? "Dividend updated" : `Added ${usd(data.amount)} from ${data.ticker}${drip ? `, reinvested into ${+(data.amount / data.dripPrice).toFixed(4)} shares` : ""}`;
@@ -758,9 +765,10 @@ function openHold(id) {
     { id: "shares", label: "Shares", type: "number", value: d ? +d.shares.toFixed(6) : "", disabled: d?.hasTx, hint: d?.hasTx ? "Calculated from transactions" : "" },
     { id: "cost", label: "Avg cost / share ($)", type: "number", value: d?.cost ? +d.cost.toFixed(4) : "", disabled: d?.hasTx, hint: d?.hasTx ? "Calculated from transactions" : "" },
     { id: "dps", label: "Annual dividend / share ($)", type: "number", value: h?.dps || "", ph: "0.00", hint: settings().massiveKey ? "Kept up to date from Massive, with the dates below" : "" },
-    { id: "freq", label: "Pays", type: "select", value: h?.freq || 4, opts: [[12, "Monthly"], [4, "Quarterly"], [2, "Semi-annually"], [1, "Annually"]] },
+    { id: "freq", label: "Pays", type: "select", value: h?.freq || 4, opts: [[52, "Weekly"], [12, "Monthly"], [4, "Quarterly"], [2, "Semi-annually"], [1, "Annually"]] },
     { id: "nextPay", label: "Next pay date", opt: 1, type: "date", value: h?.nextPay, hint: "Repeats on the calendar" },
     { id: "exDate", label: "Next ex-dividend date", opt: 1, type: "date", value: h?.exDate },
+    { id: "lockDiv", label: "Dividend figures", type: "select", value: h?.lockDiv ? "lock" : "auto", opts: [["auto", "Update automatically from Massive"], ["lock", "Keep what I entered"]], hint: settings().massiveKey ? "" : "Only matters once a Massive key is set" },
     { id: "price", label: "Current price ($)", opt: 1, type: "number", value: h?.price || "", hint: key ? "Live price is used when available" : "Used for value and yield" },
     { id: "sector", label: "Sector", opt: 1, value: h?.sector, list: "sectors", ph: "Technology", max: 40 },
     { id: "account", label: "Portfolio", opt: 1, full: 1, value: h?.account ?? acctDefault(), list: "accounts", ph: "Brokerage, Roth IRA…", max: 40, disabled: !!h } ],
@@ -771,7 +779,7 @@ function openHold(id) {
         fill("name", p?.name); fill("sector", p?.finnhubIndustry); fill("dps", m?.metric?.dividendPerShareAnnual && +(+m.metric.dividendPerShareAnnual).toFixed(4));
       } catch (err) { console.warn(err); } }); },
     onSave: async v => {
-      const data = { name: v.name, dps: v.dps || 0, freq: +v.freq, nextPay: isDate(v.nextPay) ? v.nextPay : "", exDate: isDate(v.exDate) ? v.exDate : "", price: v.price || 0, sector: v.sector };
+      const data = { name: v.name, dps: v.dps || 0, freq: +v.freq, nextPay: isDate(v.nextPay) ? v.nextPay : "", exDate: isDate(v.exDate) ? v.exDate : "", price: v.price || 0, sector: v.sector, lockDiv: v.lockDiv === "lock" };
       if (!d?.hasTx) { if (!(v.shares > 0)) bad("Enter the number of shares."); data.shares = v.shares; data.cost = v.cost || 0; }
       if (h) { await store.update("holdings", id, data); return "Holding updated"; }
       const ticker = up(v.ticker); if (!ticker) bad("Enter a ticker.");
@@ -858,7 +866,8 @@ function download(name, text, type) {
 }
 function exportCsv() {
   const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const rows = [["Date","Ticker","Amount","Tax withheld","Shares","Account","Notes"], ...state.payments.filter(inAcct).sort((a, b) => a.date.localeCompare(b.date)).map(p => [p.date, p.ticker, p.amount, p.tax || "", p.shares || "", p.account, p.notes])];
+  const qlabel = { q: "Qualified", o: "Ordinary" };
+  const rows = [["Date","Ticker","Amount","Tax withheld","Dividend type","Shares","Account","Notes"], ...state.payments.filter(inAcct).sort((a, b) => a.date.localeCompare(b.date)).map(p => [p.date, p.ticker, p.amount, p.tax || "", qlabel[p.qualified] || "", p.shares || "", p.account, p.notes])];
   download(`dividends-${today()}.csv`, rows.map(r => r.map(q).join(",")).join("\n"), "text/csv");
 }
 function parseCsv(text) {
@@ -874,12 +883,12 @@ async function importCsv(file) {
   try {
     const rows = parseCsv(await file.text()); if (rows.length < 2) return toast("That file has no rows to import");
     const head = rows[0].map(h => h.trim().toLowerCase()), ix = n => head.findIndex(h => n.some(x => h === x || h.includes(x)));
-    const cD = ix(["date"]), cT = ix(["ticker", "symbol"]), cA = head.findIndex(h => h === "amount") > -1 ? head.findIndex(h => h === "amount") : ix(["amount", "total", "value"]), cAc = ix(["account", "portfolio"]), cN = ix(["note", "description"]), cS = ix(["shares", "quantity"]), cX = ix(["tax"]);
+    const cD = ix(["date"]), cT = ix(["ticker", "symbol"]), cA = head.findIndex(h => h === "amount") > -1 ? head.findIndex(h => h === "amount") : ix(["amount", "total", "value"]), cAc = ix(["account", "portfolio"]), cN = ix(["note", "description"]), cS = ix(["shares", "quantity"]), cX = ix(["tax"]), cQ = ix(["dividend type", "qualified"]);
     if (cD < 0 || cT < 0 || cA < 0) return toast("CSV needs Date, Ticker and Amount columns");
     const toIso = s => { s = s.trim(); if (isDate(s.slice(0, 10))) return s.slice(0, 10); const m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/); return m ? `${m[3].length === 2 ? "20" + m[3] : m[3]}-${pad(m[1])}-${pad(m[2])}` : ""; };
     const have = new Set(state.payments.map(p => [p.date, p.ticker, p.amount, p.account || ""].join("|"))), jobs = []; let skip = 0;
     for (const r of rows.slice(1)) {
-      const d = { date: toIso(r[cD] || ""), ticker: up(r[cT] || ""), amount: Math.round(parseFloat(String(r[cA] || "").replace(/[$,\s]/g, "")) * 100) / 100, account: cAc > -1 ? (r[cAc] || "").trim() : "", notes: cN > -1 ? (r[cN] || "").trim().slice(0, 120) : "", shares: cS > -1 ? parseFloat(String(r[cS] || "").replace(/,/g, "")) || 0 : 0, tax: cX > -1 ? Math.abs(parseFloat(String(r[cX] || "").replace(/[$,\s]/g, ""))) || 0 : 0 };
+      const d = { date: toIso(r[cD] || ""), ticker: up(r[cT] || ""), amount: Math.round(parseFloat(String(r[cA] || "").replace(/[$,\s]/g, "")) * 100) / 100, account: cAc > -1 ? (r[cAc] || "").trim() : "", notes: cN > -1 ? (r[cN] || "").trim().slice(0, 120) : "", shares: cS > -1 ? parseFloat(String(r[cS] || "").replace(/,/g, "")) || 0 : 0, tax: cX > -1 ? Math.abs(parseFloat(String(r[cX] || "").replace(/[$,\s]/g, ""))) || 0 : 0, qualified: cQ > -1 ? ((q => q.startsWith("q") ? "q" : q.startsWith("o") ? "o" : "")((r[cQ] || "").trim().toLowerCase())) : "" };
       if (!d.date || !d.ticker || !(d.amount > 0) || have.has([d.date, d.ticker, d.amount, d.account].join("|"))) { skip++; continue; }
       jobs.push(store.add("dividends", d));
     }
@@ -889,9 +898,10 @@ async function importCsv(file) {
 /* ───────── Tax report ───────── */
 function exportTax() {
   const P = state.payments.filter(inAcct), years = uniq(P.map(p => p.date.slice(0, 4))).reverse(), y = years.includes(state.taxYear) ? state.taxYear : years[0], by = {};
-  P.filter(p => p.date.startsWith(y)).forEach(p => { const k = (p.account || "") + "|" + p.ticker, a = (by[k] ??= { a: p.account || "", t: p.ticker, n: 0, g: 0, x: 0 }); a.n++; a.g += p.amount; a.x += p.tax || 0; });
+  const types = settings().acctTypes || {};
+  P.filter(p => p.date.startsWith(y)).forEach(p => { const k = (p.account || "") + "|" + p.ticker, a = (by[k] ??= { a: p.account || "", t: p.ticker, n: 0, g: 0, x: 0, q: 0, o: 0 }); a.n++; a.g += p.amount; a.x += p.tax || 0; if (p.qualified === "q") a.q += p.amount; else if (p.qualified === "o") a.o += p.amount; });
   const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`, r2 = n => n.toFixed(2);
-  const rows = [["Year", "Portfolio", "Ticker", "Payments", "Dividends", "Tax withheld", "After tax"], ...Object.values(by).sort((a, b) => a.a.localeCompare(b.a) || a.t.localeCompare(b.t)).map(v => [y, v.a, v.t, v.n, r2(v.g), r2(v.x), r2(v.g - v.x)])];
+  const rows = [["Year", "Portfolio", "Account type", "Ticker", "Payments", "Dividends", "Qualified", "Ordinary", "Unclassified", "Tax withheld", "After tax"], ...Object.values(by).sort((a, b) => a.a.localeCompare(b.a) || a.t.localeCompare(b.t)).map(v => [y, v.a, types[v.a] === "retirement" ? "Retirement" : "Taxable", v.t, v.n, r2(v.g), r2(v.q), r2(v.o), r2(v.g - v.q - v.o), r2(v.x), r2(v.g - v.x)])];
   download(`dividend-tax-summary-${y}.csv`, rows.map(r => r.map(q).join(",")).join("\n"), "text/csv");
 }
 
@@ -926,8 +936,9 @@ function parseBroker(text) {
     const date = dateIn(cell(r, c.date)), type = classify(cell(r, c.action), cell(r, c.desc)), amount = numIn(cell(r, c.amount)); let price = Math.abs(numIn(cell(r, c.price)));
     if (!date || !ticker || !type) { skipped++; continue; }
     if (!(price > 0) && qty > 0 && isFinite(amount)) price = Math.abs(amount) / qty;
-    if (type === "reinvest") { if (qty > 0 && price > 0) items.push({ k: "buy", drip: true, date, ticker, acct, qty, price }); else if (amount > 0) items.push({ k: "div", date, ticker, acct, amount }); else skipped++; }
-    else if (type === "div") { if (amount > 0) items.push({ k: "div", date, ticker, acct, amount }); else skipped++; }
+    const atext = (cell(r, c.action) + " " + cell(r, c.desc)).toLowerCase(), qual = /non.?qualified|ordinary/.test(atext) ? "o" : /qualified/.test(atext) ? "q" : "";
+    if (type === "reinvest") { if (qty > 0 && price > 0) items.push({ k: "buy", drip: true, date, ticker, acct, qty, price }); else if (amount > 0) items.push({ k: "div", date, ticker, acct, amount, qualified: qual }); else skipped++; }
+    else if (type === "div") { if (amount > 0) items.push({ k: "div", date, ticker, acct, amount, qualified: qual }); else skipped++; }
     else if (type === "tax") { if (isFinite(amount) && amount !== 0) items.push({ k: "tax", date, ticker, acct, amount: Math.abs(amount) }); else skipped++; }
     else if (qty > 0 && price >= 0) items.push({ k: type, date, ticker, acct, qty, price }); else skipped++;
   }
@@ -967,7 +978,7 @@ async function runBrokerImport(B, acctOverride, mode) {
       if (have.has([i.date, i.ticker, amount, a].join("|"))) { nSkip++; continue; }
       const tax = Math.min(amount, r2(taxes[tk] || 0)); delete taxes[tk];
       const id = uid("imp_p_", [i.date, i.ticker, amount, a].join("|"));
-      jobs.push(() => store.set("dividends", id, { ticker: i.ticker, amount, shares: 0, date: i.date, account: a, notes: "Imported", drip: false, dripPrice: 0, tax })); nP++; }
+      jobs.push(() => store.set("dividends", id, { ticker: i.ticker, amount, shares: 0, date: i.date, account: a, notes: "Imported", drip: false, dripPrice: 0, tax, qualified: i.qualified || "" })); nP++; }
     if (mode !== "div") {
       const trades = B.items.filter(i => i.k === "buy" || i.k === "sell"), groups = {};
       trades.forEach(i => (groups[key(i.ticker, acctOf(i))] ??= []).push(i));
@@ -985,18 +996,18 @@ async function runBrokerImport(B, acctOverride, mode) {
 
 /* ───────── Backup & restore ───────── */
 const SCHEMA = {
-  dividends: { ticker: "s", amount: "n", shares: "n", date: "s", account: "s", notes: "s", drip: "b", dripPrice: "n", tax: "n" },
-  holdings: { ticker: "s", name: "s", sector: "s", account: "s", shares: "n", cost: "n", dps: "n", freq: "n", nextPay: "s", exDate: "s", price: "n" },
+  dividends: { ticker: "s", amount: "n", shares: "n", date: "s", account: "s", notes: "s", drip: "b", dripPrice: "n", tax: "n", qualified: "s" },
+  holdings: { ticker: "s", name: "s", sector: "s", account: "s", shares: "n", cost: "n", dps: "n", freq: "n", nextPay: "s", exDate: "s", price: "n", lockDiv: "b" },
   transactions: { ticker: "s", account: "s", type: "s", shares: "n", price: "n", date: "s", opening: "b", drip: "b", payId: "s" },
   watchlist: { ticker: "s", name: "s", notes: "s", target: "n", dir: "s" },
   snapshots: { date: "s", value: "n", basis: "n" },
-  settings: { goal: "n", skips: "o" }          // API keys are deliberately left out
+  settings: { goal: "n", skips: "o", acctTypes: "o" }          // API keys are deliberately left out
 };
 function cleanDoc(c, doc) {
   const out = {};
   for (const [k, t] of Object.entries(SCHEMA[c])) { const v = doc?.[k]; if (v == null) continue;
     if (t === "n") { if (isFinite(+v)) out[k] = +v; } else if (t === "s") out[k] = String(v).slice(0, 200); else if (t === "b") out[k] = !!v;
-    else if (t === "o" && typeof v === "object") out[k] = Object.fromEntries(Object.keys(v).slice(0, 2000).map(x => [String(x).slice(0, 80), 1])); }
+    else if (t === "o" && typeof v === "object") out[k] = Object.fromEntries(Object.keys(v).slice(0, 2000).map(x => [String(x).slice(0, 80), typeof v[x] === "string" ? String(v[x]).slice(0, 20) : 1])); }
   return out;
 }
 const okId = id => typeof id === "string" && id.length > 0 && id.length <= 200 && !id.includes("/") && id !== "." && id !== "..";
@@ -1047,7 +1058,7 @@ const TIPS = {
   health: "A quick read on each dividend: the change from a year ago, its 5-year growth, and how much of earnings it uses (payout ratio).",
   coverage: "Expected income in each calendar month over the next year, so you can see which months are light.",
   projection: "A what-if, not a forecast: it grows today's income by the rates you set and ignores taxes and fees.",
-  tax: "Totals of the tax you logged as withheld, for your own records. Your broker's 1099-DIV is the official figure, and it also splits qualified from ordinary dividends."
+  tax: "Dividends and tax you logged, by portfolio, with a qualified-vs-ordinary split. Mark each portfolio taxable or retirement. Your broker's 1099-DIV is the official figure."
 };
 const tip = id => TIPS[id] ? ` <button class="tipbtn" type="button" data-tip="${id}" aria-label="What's this?" aria-expanded="false">?</button>` : "";
 let tipEl = null, tipPinned = null;
@@ -1150,8 +1161,9 @@ async function exportReport(kind) {
         ["Dividends received", R.gross], ["Tax withheld", R.tax], ["After tax", R.gross - R.tax], ["Payments", R.P.length],
         ["Holdings", R.pos.length], ["Projected annual income", R.s.projected]];
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), "Summary");
-      const pay = [["Date", "Ticker", "Amount", "Tax withheld", "Shares", "Account", "Notes"],
-        ...R.P.map(p => [p.date, p.ticker, p.amount, p.tax || 0, p.shares || "", p.account || "", p.notes || ""])];
+      const ql = { q: "Qualified", o: "Ordinary" };
+      const pay = [["Date", "Ticker", "Amount", "Tax withheld", "Dividend type", "Shares", "Account", "Notes"],
+        ...R.P.map(p => [p.date, p.ticker, p.amount, p.tax || 0, ql[p.qualified] || "", p.shares || "", p.account || "", p.notes || ""])];
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pay), "Payments");
       const mon = [["Month", "Income"], ...R.months.map((v, i) => [MONTHS[i], v])];
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(mon), "By Month");
@@ -1226,6 +1238,8 @@ document.addEventListener("change", e => {
     try { localStorage.setItem("dt_proj", JSON.stringify(state.proj)); } catch {} render(); }
   else if (e.target.id === "csvFile") { const f = e.target.files[0]; e.target.value = ""; if (f && store) importCsv(f); }
   else if (e.target.id === "taxYear") { state.taxYear = e.target.value; render(); }
+  else if (e.target.dataset.acctype !== undefined && store) { const a = e.target.dataset.acctype;
+    store.set("settings", "main", { acctTypes: { ...(settings().acctTypes || {}), [a]: e.target.value } }).then(() => render()).catch(() => toast("Couldn't save that")); }
   else if (e.target.id === "brokerFile") { const f = e.target.files[0]; e.target.value = ""; if (f && store) readBroker(f); }
   else if (e.target.id === "bakFile") { const f = e.target.files[0]; e.target.value = ""; if (f && store) readBackup(f); }
 });
